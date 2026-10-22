@@ -15,7 +15,7 @@ import (
 // the status page can say so. It never downloads or installs anything.
 
 // A variable so that test builds can point it elsewhere (-ldflags -X).
-var releasesAPI = "https://api.github.com/repos/holdmysocks/ps5-tailscale/releases/latest"
+var releasesAPI = "https://api.github.com/repos/jayy-ahn/ps5-tailscale/releases/latest"
 
 type releaseInfo struct {
 	Version string // without the leading "v"

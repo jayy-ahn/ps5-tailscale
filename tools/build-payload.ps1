@@ -38,11 +38,18 @@ Push-Location (Join-Path $DevRoot $GoDir)
 try { Invoke-PS5Go @goArgs } finally { Pop-Location }
 
 $img = $bin -replace '\\', '/'
-$ccArgs = @('-O2', '-Wall', "-DGO_IMAGE=`"$img`"")
-if ($DebugLoader) { $ccArgs += '-DGOLOAD_DEBUG' }
-if ($Watchdog -gt 0) { $ccArgs += "-DGOLOAD_WATCHDOG=$Watchdog" }
-if ($MaxProcs) { $ccArgs += "-DGO_MAXPROCS=`"$MaxProcs`"" }
-if ($GoDebug) { $ccArgs += "-DGO_DEBUG=`"$GoDebug`"" }
+# String -D defines go to clang through a response file: PowerShell eats the
+# embedded quotes when building the child's command line, which leaves
+# "#define GO_IMAGE C:\..." behind instead of a string literal. Inside the
+# response file the quotes must be backslash-escaped, or clang's own parser
+# would strip them as well.
+$defines = @()
+if ($DebugLoader) { $defines += '-DGOLOAD_DEBUG' }
+if ($Watchdog -gt 0) { $defines += "-DGOLOAD_WATCHDOG=$Watchdog" }
+if ($MaxProcs) { $defines += ('-DGO_MAXPROCS=\"' + $MaxProcs + '\"') }
+if ($GoDebug) { $defines += ('-DGO_DEBUG=\"' + $GoDebug + '\"') }
+$defines += ('-DGO_IMAGE=\"' + $img + '\"')
+$ccArgs = @('-O2', '-Wall')
 if ($HomeIcon) {
     # The icon helper is a payload of its own. The app installer library only
     # loads when these come with it, in this order (as in the SDK's
@@ -50,11 +57,16 @@ if ($HomeIcon) {
     # started.
     $helper = Join-Path $out 'appicon.elf'
     $assets = (Join-Path $DevRoot 'appicon') -replace '\\', '/'
-    Invoke-PS5CC -O2 -Wall "-DASSET_DIR=`"$assets`"" `
+    $assetRsp = Join-Path $out 'appicon.defines'
+    [IO.File]::WriteAllLines($assetRsp, @('-DASSET_DIR=\"' + $assets + '\"'), [Text.UTF8Encoding]::new($false))
+    Invoke-PS5CC -O2 -Wall "@$assetRsp" `
         -lSceIpmi -lSceAppInstUtil -lSceUserService -lSceSystemService `
         -o $helper (Join-Path $DevRoot 'appicon\main.c')
-    $ccArgs += "-DICON_HELPER=`"$($helper -replace '\\', '/')`""
+    $defines += ('-DICON_HELPER=\"' + ($helper -replace '\\', '/') + '\"')
 }
+$rsp = Join-Path $out 'launcher.defines'
+[IO.File]::WriteAllLines($rsp, $defines, [Text.UTF8Encoding]::new($false))
+$ccArgs += "@$rsp"
 $ccArgs += @('-o', $elf, (Join-Path $DevRoot 'launcher\main.c'), (Join-Path $DevRoot 'launcher\goload.c'),
     (Join-Path $DevRoot 'launcher\homeicon.c'), (Join-Path $DevRoot 'launcher\report.c'))
 Invoke-PS5CC @ccArgs

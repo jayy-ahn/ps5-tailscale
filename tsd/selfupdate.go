@@ -28,9 +28,11 @@ import (
 
 // updatePublicKey is the public half of the release signing key (base64
 // Ed25519). Only releases signed with the private half can be installed from
-// the status page. A fork that makes its own releases needs its own key
-// (tsd/cmd/signrelease); test builds set another one with -ldflags -X.
-var updatePublicKey = "HUcHCXGe3vNEeyt4frmoKZUqYDamdA1dzsr+Hsybda0="
+// the status page. This fork signs its own releases with its own key
+// (tsd/cmd/signrelease); the private half lives on the maintainer's machine
+// at ~/.ps5-tailscale/release-signing.key and is not in the repository. Test
+// builds set another one with -ldflags -X.
+var updatePublicKey = "UOv1VC5SzCwK4af88904Bp964uFniYLZhkGjwDJcMeM="
 
 const (
 	maxPayload    = 128 << 20
