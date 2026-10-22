@@ -6,10 +6,12 @@ import (
 	"errors"
 	"io"
 	"net"
+	"net/netip"
 	"strings"
 	"testing"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/net/dnscache"
 )
 
@@ -310,13 +312,146 @@ func TestDoHLive(t *testing.T) {
 	if _, err := net.DialTimeout("tcp", "1.1.1.1:443", 2*time.Second); err != nil {
 		t.Skip("no network to reach a DNS-over-HTTPS endpoint")
 	}
+	p := newDNSPicker(t.Logf)
 	q := dnsQuery(1, "tailscale.com")
-	reply, err := dnsDoHAsk(context.Background(), q)
+	reply, err := p.dohAsk(context.Background(), q)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if dnsRcode(reply) != 0 || len(reply) <= len(q) {
 		t.Errorf("bad reply: rcode %d, %d bytes", dnsRcode(reply), len(reply))
+	}
+}
+
+// A name with an address set on the status page is answered from it at
+// once: the right record kind gets the address, the wrong one a clean empty
+// answer, and no name server is ever asked for either.
+func TestFixedNames(t *testing.T) {
+	p := &dnsPicker{
+		logf: func(string, ...any) {},
+		plainAsk: func(ctx context.Context, _, _ string, q []byte) ([]byte, error) {
+			t.Error("a fixed name must not reach a plain server")
+			return nil, errors.New("must not be asked")
+		},
+		dohAsk: func(ctx context.Context, q []byte) ([]byte, error) {
+			t.Error("a fixed name must not go over HTTPS")
+			return nil, errors.New("must not be asked")
+		},
+	}
+	p.setFixedNames(map[string]string{"Headscale.Example.Com.": "203.0.113.9"})
+
+	q := dnsQuery(9, "headscale.example.com")
+	r := p.forwardQuery(context.Background(), "udp", "1.1.1.1:53", q)
+	if dnsRcode(r) != 0 || dnsAnswerCount(r) != 1 {
+		t.Fatalf("fixed A answer: rcode %d, %d answers", dnsRcode(r), dnsAnswerCount(r))
+	}
+	var pr dnsmessage.Parser
+	if _, err := pr.Start(r); err != nil {
+		t.Fatalf("reply does not parse: %v", err)
+	}
+	if _, err := pr.AllQuestions(); err != nil {
+		t.Fatalf("reply question: %v", err)
+	}
+	if _, err := pr.AnswerHeader(); err != nil {
+		t.Fatalf("reply answer header: %v", err)
+	}
+	a, err := pr.AResource()
+	if err != nil {
+		t.Fatalf("reply A record: %v", err)
+	}
+	if got, want := netip.AddrFrom4(a.A), netip.MustParseAddr("203.0.113.9"); got != want {
+		t.Errorf("answered %v, want %v", got, want)
+	}
+
+	// The record kind with no address set: a clean empty answer, so Go's
+	// resolver finds the name and stops asking. (The tail of a query is
+	// qtype then qclass; the AAAA type goes at len-4.)
+	q6 := append([]byte(nil), dnsQuery(9, "headscale.example.com")...)
+	q6[len(q6)-4], q6[len(q6)-3] = 0, 28 // AAAA
+	r6 := p.forwardQuery(context.Background(), "udp", "1.1.1.1:53", q6)
+	if dnsRcode(r6) != 0 || dnsAnswerCount(r6) != 0 {
+		t.Errorf("AAAA for an IPv4-only fixed name: rcode %d, %d answers", dnsRcode(r6), dnsAnswerCount(r6))
+	}
+
+	// A name that is not fixed takes the ordinary path (plain, then HTTPS).
+	p.plainAsk = func(ctx context.Context, _, _ string, q []byte) ([]byte, error) { return noAnswerTo(q), nil }
+	p.dohAsk = func(ctx context.Context, q []byte) ([]byte, error) {
+		r := replyTo(q, 0)
+		r[11] = 0xAA
+		return r, nil
+	}
+	if r := p.forwardQuery(context.Background(), "udp", "1.1.1.1:53", dnsQuery(9, "other.example")); r[11] != 0xAA {
+		t.Error("an unfixed name did not take the ordinary path")
+	}
+}
+
+// Every endpoint is asked at once: one that answers quickly wins over
+// endpoints that would take longer than the resolver's patience, and when
+// none can answer the failures are reported together.
+func TestDoHRace(t *testing.T) {
+	q := dnsQuery(1, "example.com")
+	_, qs, _ := dnsParseQuery(q)
+	good := dnsBuildReply(q, qs, []netip.Addr{netip.MustParseAddr("203.0.113.9")})
+	eps := []dohEndpoint{
+		{"slow-a.doh.example", "/dns-query", []string{"1.1.1.1", "1.0.0.1"}},
+		{"slow-b.doh.example", "/dns-query", []string{"8.8.8.8"}},
+		{"fast.doh.example", "/dns-query", []string{"8.8.4.4"}},
+	}
+	start := time.Now()
+	reply, err := dohRace(context.Background(), q, eps,
+		func(ctx context.Context, host, path, ip string, query []byte) ([]byte, error) {
+			if host == "fast.doh.example" {
+				time.Sleep(20 * time.Millisecond)
+				return good, nil
+			}
+			time.Sleep(2 * time.Second) // would miss any sane deadline
+			return nil, errors.New("no route")
+		})
+	if err != nil {
+		t.Fatalf("race: %v", err)
+	}
+	if dnsAnswerCount(reply) != 1 {
+		t.Errorf("race returned a reply with %d answers", dnsAnswerCount(reply))
+	}
+	if time.Since(start) > time.Second {
+		t.Errorf("the race took %v; endpoints were not asked at once", time.Since(start))
+	}
+
+	_, err = dohRace(context.Background(), q, eps,
+		func(ctx context.Context, host, path, ip string, query []byte) ([]byte, error) {
+			return nil, errors.New("no route to " + ip)
+		})
+	if err == nil || !strings.Contains(err.Error(), "8.8.4.4") || !strings.Contains(err.Error(), "1.1.1.1") {
+		t.Errorf("all failing should report every endpoint: %v", err)
+	}
+}
+
+// An endpoint that hands back something that is not an answer — an
+// interceptor's page over port 443, a refusal, an empty answer, another
+// name's answer — counts as failing, not as an answer.
+func TestAnswerProblems(t *testing.T) {
+	q := dnsQuery(1, "example.com")
+	_, qs, _ := dnsParseQuery(q)
+	good := dnsBuildReply(q, qs, []netip.Addr{netip.MustParseAddr("203.0.113.9")})
+	other := dnsQuery(1, "other.example")
+	_, qsOther, _ := dnsParseQuery(other)
+	servfail := dnsBuildReply(q, qs, nil)
+	servfail[3] |= 0x02
+	otherAnswer := dnsBuildReply(other, qsOther, []netip.Addr{netip.MustParseAddr("203.0.113.9")})
+	for name, tt := range map[string]struct {
+		reply []byte
+		want  bool // true = a problem
+	}{
+		"a real answer":    {good, false},
+		"an error page":    {[]byte("<html>403 forbidden</html>"), true},
+		"a refusal":        {servfail, true},
+		"an empty answer":  {dnsBuildReply(q, qs, nil), true},
+		"another name":     {otherAnswer, true},
+		"the query itself": {q, true},
+	} {
+		if err := dnsAnswerProblems(q, tt.reply, "doh.example"); (err != nil) != tt.want {
+			t.Errorf("%s: err = %v, want problem = %v", name, err, tt.want)
+		}
 	}
 }
 

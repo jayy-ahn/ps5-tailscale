@@ -28,6 +28,11 @@ type config struct {
 	// It can be set on the status page; saving a different one starts
 	// Tailscale again, and the console must log in to that server.
 	ControlURL string `json:"controlURL,omitempty"`
+	// NameAddresses gives a fixed address for a name this network's DNS
+	// refuses to resolve, usually the coordination server above. It is
+	// edited on the status page; such a name is answered from the address
+	// directly, with no name server asked at all.
+	NameAddresses map[string]string `json:"nameAddresses,omitempty"`
 	// SunshineHosts are tailnet devices running Sunshine. Their streaming
 	// ports are forwarded from 127.0.0.1, so a Moonlight client on the
 	// console can use 127.0.0.1 as the host.

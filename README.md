@@ -445,14 +445,21 @@ Left to do by hand:
   daemon looks names up itself: at a DNS payload on the console
   (`127.0.0.1:53`) if one is running, otherwise at your router, otherwise at
   a public resolver (1.1.1.1, 8.8.8.8, 9.9.9.9). The log says which one it
-  uses in a line starting with `DNS:`. A query that none of those can
-  answer — a router that blocks or breaks one name, a network that
-  intercepts all plain DNS — is asked again over DNS-over-HTTPS
-  (`cloudflare-dns.com`, `dns.google`) over ordinary HTTPS, which such
-  networks cannot intercept; the log says so when that happens. The DNS
-  server set in the PS5's network settings plays no part either way: the
-  daemon never uses it. The status page shows what is in use under
-  "Name lookups".
+  uses in a line starting with `DNS:`. A query that a plain server cannot
+  properly answer — silence, an error, or a negative answer (NXDOMAIN,
+  SERVFAIL, "no error, no addresses"), which is exactly what an interceptor
+  hands back for a name it refuses to resolve — is asked at once over
+  DNS-over-HTTPS (`cloudflare-dns.com`, `dns.google`, all of them at once)
+  over ordinary HTTPS; an endpoint's reply counts only if it is a real
+  answer to that exact name, so an interceptor's error page over port 443
+  cannot pass for one. If your own server's name is one DNS refuses to
+  answer for, put it under **Names your network cannot resolve** in the
+  settings (`headscale.example.com=203.0.113.9`): the console then goes
+  straight to that address for that name without asking any name server.
+  The log also says, right after start-up, whether the coordination
+  server's name resolves at all. The DNS server set in the PS5's network
+  settings plays no part either way: the daemon never uses it. The status
+  page shows what is in use under "Name lookups".
 - **A stream or Remote Play stutters.** Look at the device in the list on the
   status page and press **test**. "Relayed" means the two devices could not
   connect directly and the traffic takes a detour; that is usually a router
@@ -488,7 +495,9 @@ Left to do by hand:
   one, otherwise to your router or a public resolver; a query none of them
   can answer is asked again over DNS-over-HTTPS (`cloudflare-dns.com` or
   `dns.google`), so a network whose resolver blocks or breaks one name can
-  still reach its coordination server. They are only the
+  still reach its coordination server. A name you have fixed to an address
+  under **Names your network cannot resolve** is answered locally and goes
+  to no resolver at all. They are only the
   daemon's own lookups (Tailscale's servers, GitHub, what you send through
   the HTTP proxy), not the console's.
 - An update is only installed when **Install** is pressed, and only if it

@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path"
@@ -34,10 +36,13 @@ const (
 
 // settings is the editable part of the config as the status page sees it.
 type settings struct {
-	Hostname      string         `json:"hostname"`
-	WebAddr       string         `json:"webAddr"`
-	HTTPProxyAddr string         `json:"httpProxyAddr"`
-	ControlURL    string         `json:"controlURL"`
+	Hostname      string `json:"hostname"`
+	WebAddr       string `json:"webAddr"`
+	HTTPProxyAddr string `json:"httpProxyAddr"`
+	ControlURL    string `json:"controlURL"`
+	// NameAddresses is the fixed name=address list as one string, as the
+	// form edits it; names maps it after validate.
+	NameAddresses string         `json:"nameAddresses"`
 	SunshineHosts []sunshineHost `json:"sunshineHosts"`
 	Forwards      []forwardRule  `json:"forwards"`
 	UDPPorts      []uint16       `json:"udpPorts"`
@@ -54,6 +59,49 @@ type settings struct {
 	// else sets it.
 	PasswordSet bool    `json:"passwordSet"`
 	Password    *string `json:"password,omitempty"`
+
+	names map[string]string // NameAddresses, mapped by validate
+}
+
+// nameAddresses joins the fixed name=address map for the form, in a stable
+// order.
+func nameAddressesJoin(m map[string]string) string {
+	if len(m) == 0 {
+		return ""
+	}
+	names := make([]string, 0, len(m))
+	for name := range m {
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	for i, name := range names {
+		names[i] = name + "=" + m[name]
+	}
+	return strings.Join(names, ", ")
+}
+
+// nameAddressesFromForm parses the form's list: "a.example.com=1.2.3.4,
+// b.example.com=::1". It is case- and dot-insensitive on the names, and
+// refuses entries that are not exactly a name and an address.
+func nameAddressesFromForm(s string) (map[string]string, error) {
+	if strings.TrimSpace(s) == "" {
+		return nil, nil
+	}
+	out := map[string]string{}
+	for _, tok := range strings.FieldsFunc(s, func(r rune) bool {
+		return r == ',' || r == ';' || r == '\n' || r == '\r'
+	}) {
+		name, addr, ok := strings.Cut(tok, "=")
+		if !ok || dnsFixName(name) == "" || !validHostName(dnsFixName(name)) {
+			return nil, fmt.Errorf("fixed address %q: write it as name=address, such as headscale.example.com=203.0.113.9", tok)
+		}
+		a, err := netip.ParseAddr(strings.TrimSpace(addr))
+		if err != nil {
+			return nil, fmt.Errorf("fixed address %q: %s is not an address", tok, addr)
+		}
+		out[dnsFixName(name)] = a.String()
+	}
+	return out, nil
 }
 
 func settingsFromConfig(cfg config) settings {
@@ -62,6 +110,7 @@ func settingsFromConfig(cfg config) settings {
 		WebAddr:       cfg.WebAddr,
 		HTTPProxyAddr: cfg.HTTPProxyAddr,
 		ControlURL:    cfg.ControlURL,
+		NameAddresses: nameAddressesJoin(cfg.NameAddresses),
 		SunshineHosts: append([]sunshineHost{}, cfg.SunshineHosts...),
 		Forwards:      append([]forwardRule{}, cfg.Forwards...),
 		UDPPorts:      append([]uint16{}, cfg.UDPPorts...),
@@ -103,6 +152,12 @@ func (s *settings) validate() error {
 		return err
 	}
 	s.ControlURL = control
+	names, err := nameAddressesFromForm(s.NameAddresses)
+	if err != nil {
+		return err
+	}
+	s.names = names
+	s.NameAddresses = nameAddressesJoin(names)
 	if err := validateSunshineHosts(s.SunshineHosts); err != nil {
 		return err
 	}
@@ -269,6 +324,7 @@ func (d *daemon) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	cfg.WebAddr = s.WebAddr
 	cfg.HTTPProxyAddr = s.HTTPProxyAddr
 	cfg.ControlURL = s.ControlURL
+	cfg.NameAddresses = s.names
 	if s.SunshineHosts != nil {
 		// The settings form leaves the Sunshine hosts out: they have a
 		// panel of their own.
@@ -322,6 +378,13 @@ func (d *daemon) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	if err := d.fwd.set(d.localForwardRules()); err != nil {
 		problems = append(problems, err.Error())
 	}
+	if !maps.Equal(cfg.NameAddresses, old.NameAddresses) {
+		// Fixed addresses apply to the running process at once.
+		if d.dns != nil {
+			d.dns.setFixedNames(cfg.NameAddresses)
+			go d.dns.checkControl(cfg.ControlURL)
+		}
+	}
 	if cfg.HTTPProxyAddr != old.HTTPProxyAddr {
 		if err := d.setProxy(cfg.HTTPProxyAddr); err != nil {
 			problems = append(problems, "HTTP proxy: "+err.Error())
@@ -365,6 +428,11 @@ func (d *daemon) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 			out["restarting"] = "Tailscale is starting again with " + where + ". You must log in again; the new login link appears on this page."
 		} else {
 			out["restart"] = append(restart, "coordination server")
+		}
+		if d.dns != nil {
+			// Say in the log, at once, whether the new server's name can
+			// be found on this network.
+			go d.dns.checkControl(cfg.ControlURL)
 		}
 	}
 

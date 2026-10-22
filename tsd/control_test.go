@@ -168,3 +168,38 @@ func TestControlURLFromConfigFile(t *testing.T) {
 		t.Errorf("the page does not show the file's server: %q", s.ControlURL)
 	}
 }
+
+func TestNameAddressesFromForm(t *testing.T) {
+	m, err := nameAddressesFromForm("")
+	if err != nil || m != nil {
+		t.Errorf("empty: %v, %v", m, err)
+	}
+	m, err = nameAddressesFromForm(" Headscale.Example.Com. = 203.0.113.9, b.example.com=::1 ")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := m["headscale.example.com"]; got != "203.0.113.9" {
+		t.Errorf("mapped as %v", m)
+	}
+	if got := m["b.example.com"]; got != "::1" {
+		t.Errorf("IPv6 mapped as %v", m)
+	}
+	if got := nameAddressesJoin(m); got != "b.example.com=::1, headscale.example.com=203.0.113.9" {
+		t.Errorf("joined back as %q", got)
+	}
+	for _, bad := range []string{"headscale.example.com", "headscale.example.com=not-an-ip", "=203.0.113.9", "a b=1.2.3.4=5"} {
+		if _, err := nameAddressesFromForm(bad); err == nil {
+			t.Errorf("%q was accepted", bad)
+		}
+	}
+	// A settings form round trip: config -> form string -> validate -> map.
+	cfg := config{Hostname: "ps5", WebAddr: ":8090", NameAddresses: map[string]string{"headscale.example.com": "203.0.113.9"}}
+	s := settingsFromConfig(cfg)
+	s.SunshineHosts = nil
+	if err := s.validate(); err != nil {
+		t.Fatal(err)
+	}
+	if s.names["headscale.example.com"] != "203.0.113.9" {
+		t.Errorf("round trip lost the entry: %v", s.names)
+	}
+}

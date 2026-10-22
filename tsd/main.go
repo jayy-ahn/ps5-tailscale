@@ -71,6 +71,8 @@ func main() {
 	if runtime.GOOS == "freebsd" {
 		dns = newDNSPicker(logf)
 		dns.install()
+		dns.setFixedNames(cfg.NameAddresses)
+		go dns.checkControl(cfg.ControlURL)
 	}
 
 	// A payload that is sent again replaces the running instance, which is

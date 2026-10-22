@@ -210,6 +210,32 @@ apply `SOCK_NONBLOCK`/`SOCK_CLOEXEC` with `fcntl`.
   DoH endpoints need no name lookup of their own and no UDP port 53 path
   exists for a network to intercept. The daemon imports `x509roots/fallback`
   for TLS roots.
+- Every DoH endpoint is asked **at once**, not one after another. Go's
+  resolver gives a single attempt at one name server about 5 s before it
+  re-dials, and the whole fallback must answer inside that: plain server
+  (2 s) plus DoH (2.5 s, all endpoints in parallel) is at worst 4.5 s. A
+  serial probe could not fit: the answer arrived after the resolver had
+  hung up, the attempt died, and a control lookup failed at exactly the
+  DNS cache's outer 10 s budget twice over — and fell through to the DERP
+  bootstrap DNS, which cannot know a private server's name. A DoH reply is
+  also parsed and checked (`dnsAnswerProblems`): it counts only if it is a
+  response, carries the very name and record kind asked, with a success
+  rcode and at least one answer. An interceptor's error page over port 443
+  is therefore a failure, not an answer, and the failure of every endpoint
+  is reported together in one log line.
+- A name the network's DNS will not resolve at all — usually the user's
+  own coordination server — can be fixed to an address on the status page
+  (**Names your network cannot resolve**, `name=address`, comma-separated;
+  `config.json` field `nameAddresses`). A fixed name is answered from the
+  address without asking any name server; the record kind with no address
+  set gets a clean empty answer so Go's resolver finds the name and stops
+  asking. Fixed addresses apply to the running process at once; no restart
+  is needed.
+- After the picker is installed, and whenever the coordination server or
+  the fixed addresses change, the daemon resolves the coordination
+  server's name itself (`checkControl`) and logs the outcome, so a
+  diagnostics file says at once whether the console can find its own
+  server instead of waiting for Tailscale to time out twice.
 - The picker is installed into both resolvers that matter: `net.DefaultResolver`
   (the daemon's own HTTP, the update check) and `dnscache.Get().Forward`
   (Tailscale's DNS cache). The control client copies the cache's forwarder

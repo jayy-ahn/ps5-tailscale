@@ -72,8 +72,11 @@ type statusInfo struct {
 	// AllowFrom is "all" or "own": which tailnet devices may connect.
 	AllowFrom string `json:"allowFrom"`
 	// ControlURL is the coordination server in use; empty means
-	// Tailscale's own.
+	// Tailscale's own servers.
 	ControlURL string `json:"controlURL,omitempty"`
+	// NameAddresses lists the fixed name=address entries in use, for the
+	// status page's fact rows.
+	NameAddresses string `json:"nameAddresses,omitempty"`
 	// KeyExpiry is when this console's Tailscale key expires, if it does.
 	KeyExpiry *time.Time `json:"keyExpiry,omitempty"`
 	// LatestVersion and UpdateURL are set when a newer release exists.
@@ -210,6 +213,7 @@ func (d *daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Priority:      priorityLow,
 		AllowFrom:     accessAll,
 		ControlURL:    d.cfg.ControlURL,
+		NameAddresses: nameAddressesJoin(d.cfg.NameAddresses),
 		PasswordSet:   d.cfg.PasswordHash != "",
 		Uptime:        int64(time.Since(d.started).Seconds()),
 		IPs:           []string{},

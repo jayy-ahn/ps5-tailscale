@@ -1,0 +1,282 @@
+ps5-tailscale diagnostics
+Please read this file before posting it. E-mail addresses, the tailnet's name, public IP
+addresses, keys and the password have been removed; device names and tailnet addresses have not.
+
+version:      0.7.5 (freebsd/amd64)
+firmware:     11.40
+created:      2026-10-22 13:24:13 UTC
+running for:  38s
+state:        Starting
+name lookups: 192.168.0.1 (router)
+UDP ports:    []
+forwards:     0 active
+
+===== tailscale =====
+backend state: NeedsLogin
+health: You are logged out. The last login error was: fetch control key: Get "https://headscale.jayahn.xyz/key?v=148": failed to resolve "headscale.jayahn.xyz": no DNS fallback candidates remain for "headscale.jayahn.xyz"
+self: , addresses [], relay "", key expiry <nil>
+peers: 0, VPN exit servers: 0
+
+===== settings (password and auth key removed) =====
+{
+  "hostname": "ps5",
+  "webAddr": ":8090",
+  "httpProxyAddr": "",
+  "controlURL": "https://headscale.jayahn.xyz",
+  "udpPorts": [
+    9295,
+    9296,
+    9297,
+    9302
+  ],
+  "receiveDir": "/data/tailscale/received",
+  "checkUpdates": true
+}
+
+===== launcher.log =====
+2026-10-22 13:23:34 UTC launcher: starting, firmware 11.40, pid 110
+2026-10-22 13:23:35 UTC launcher: home screen icon installed
+2026-10-22 13:23:35 UTC launcher: starting the Go program
+
+===== tailscale.log (end) =====
+2026-10-22T13:15:47Z [INFO] TSP5 DASHBOARD_BUILD_START pid=108
+2026-10-22T13:15:47Z [INFO] TSP5 MEDIA_LAUNCHER_EXTERNAL_BOOTSTRAP active
+2026-10-22T13:15:47Z [INFO] TSP5 DASHBOARD_READY address=0.0.0.0 port=8085 lan=192.168.0.96
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH179 disabling future tracing before Go/Tailscale startup
+2026-10-22T13:15:47Z [ERROR] TSP5 AUTH179_TRACE_STATUS before failed rc=3 kernel_errno=3 libc_errno=0 No error
+2026-10-22T13:15:47Z [ERROR] TSP5 AUTH179_TRACE_CTL disable failed rc=3 kernel_errno=3 libc_errno=0 No error
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH175 checking inherited CPU-time limit before Go/Tailscale startup
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH175_RLIMIT_CPU before soft=9223372036854775807 hard=9223372036854775807
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH175_RLIMIT_CPU unchanged reason=soft-unlimited
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH177_TRACER_STATE startup rc=0 stat=2 xstat=0 tracer=0 threads=6
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH174 control EAGAIN uses 1ms native backoff; AUTH171 async preemption remains disabled
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH181 Go syscall entry points deny SYS_ptrace=26 with EPERM
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH183 Go signal handler logs signal number and si_code at entry
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH186 tracing signal-send syscalls kill=37 thr_kill=433 sigqueue=456 thr_kill2=481 pdkill=519
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH190 syscall assembly scratch frames declare NO_LOCAL_POINTERS
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH191 libtailscale startup ignores SIGPIPE before tsnet.Server.Start
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH192 restoring engine.Reconfig side effects
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH193 restoring ReSTUN endpoint discovery
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH197 promoting the proven poll-gated listener to resident service; peer API and async RequestStatus remain disabled
+2026-10-22T13:15:47Z [INFO] TSP5 libtailscale resident service starting build=AUTH197-RESIDENT-LISTENER pid=108 ppid=82
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH151_NATIVE_TIMEOUT recv rc=-1 errno=35
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH151_NATIVE_TIMEOUT_RESULT rc=0
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH151_NATIVE_HEARTBEAT_START rc=0
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH197 listener close-watch disabled; resident poll-gated listener will be created
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH193-CONTROL-READ-BREAK reusing AUTH133 fresh profile; ReSTUN restored
+2026-10-22T13:15:47Z [INFO] TSP5 AUTH151_DIRECT_POLL_TRACE_FD fd=23
+2026-10-22T13:15:47Z [INFO] TSP5 Go libtailscale stage 1801
+2026-10-22T13:15:47Z [INFO] TSP5 Go libtailscale stage 1902
+2026-10-22T13:15:47Z [INFO] TSP5 Go libtailscale stage 101
+2026-10-22T13:15:47Z [INFO] TSP5 Go libtailscale stage 102
+2026-10-22T13:15:47Z [INFO] TSP5 Go libtailscale stage 103
+2026-10-22T13:15:47Z [INFO] TSP5 Go libtailscale stage 104
+2026-10-22T13:15:47Z [INFO] TSP5 Go libtailscale stage 105
+2026-10-22T13:15:47Z [INFO] TSP5 Go libtailscale stage 106
+2026-10-22T13:15:47Z [INFO] TSP5 Go libtailscale stage 107
+2026-10-22T13:15:47Z [INFO] TSP5 Go libtailscale stage 108
+2026-10-22T13:15:47Z [INFO] TSP5 Go libtailscale stage 109
+2026-10-22T13:15:47Z [INFO] TSP5 ENROLLMENT no persisted profile; waiting for dashboard registration request
+2026-10-22 13:23:35 ps5-tailscale 0.7.5 starting, hostname "ps5", web UI on :8090
+2026-10-22 13:23:35 DNS: nothing answers at 127.0.0.1:53; using 192.168.0.1:53 instead (in order of preference: [127.0.0.1:53 192.168.0.1:53 1.1.1.1:53 8.8.8.8:53 9.9.9.9:53])
+2026-10-22 13:23:35 tsnet: tsnet running state path /data/tailscale/state/tailscaled.state
+2026-10-22 13:23:35 DNS: 192.168.0.1:53 could not answer a query (answered with no addresses); asked over HTTPS instead
+2026-10-22 13:23:35 tsnet: tsnet starting with hostname "ps5", varRoot "/data/tailscale/state"
+2026-10-22 13:23:35 tsnet: LocalBackend state is NeedsLogin; running StartLoginInteractive...
+2026-10-22 13:23:35 state:  -> NeedsLogin
+2026-10-22 13:23:47 login URL: https://login.tailscale.com/a/<removed>
+2026-10-22 13:23:49 settings changed from the status page
+2026-10-22 13:23:49 starting Tailscale again: the coordination server is now https://headscale.jayahn.xyz
+2026-10-22 13:23:55 tsnet: tsnet running state path /data/tailscale/state/tailscaled.state
+2026-10-22 13:23:55 tsnet: tsnet starting with hostname "ps5", varRoot "/data/tailscale/state"
+2026-10-22 13:23:55 tsnet: LocalBackend state is NeedsLogin; running StartLoginInteractive...
+2026-10-22 13:23:55 Tailscale is running on the new settings
+
+===== tailscale-debug.log (end) =====
+2026-10-22 13:23:35.452 ts: monitor: devd dial error: dial unixpacket /var/run/devd.seqpacket.pipe: connect: no such file or directory, falling back to polling method
+2026-10-22 13:23:35.460 ts: [v1] using fake (no-op) tun device
+2026-10-22 13:23:35.461 ts: [v1] using fake (no-op) OS network configurator
+2026-10-22 13:23:35.462 ts: [v1] using fake (no-op) DNS configurator
+2026-10-22 13:23:35.463 ts: dns: using dns.noopManager
+2026-10-22 13:23:35.464 ts: link state: interfaces.State{defaultRoute=wlan0 ifs={wlan0:[192.168.0.96/24 llu6]} v4=true v6=false}
+2026-10-22 13:23:35.466 ts: magicsock: failed to set UDP read buffer size to 7340032: set udp6 [::]:58550: setsockopt: no buffer space available
+2026-10-22 13:23:35.467 ts: magicsock: failed to set UDP write buffer size to 7340032: set udp6 [::]:58550: setsockopt: no buffer space available
+2026-10-22 13:23:35.468 ts: magicsock: failed to set UDP read buffer size to 7340032: set udp4 0.0.0.0:50034: setsockopt: no buffer space available
+2026-10-22 13:23:35.469 ts: magicsock: failed to set UDP write buffer size to 7340032: set udp4 0.0.0.0:50034: setsockopt: no buffer space available
+2026-10-22 13:23:35.470 ts: magicsock: disco key = d:e3be53a1a4920e6f
+2026-10-22 13:23:35.471 ts: Creating WireGuard device...
+2026-10-22 13:23:35.472 ts: Bringing WireGuard device up...
+2026-10-22 13:23:35.474 ts: wg: [v2] UDP bind has been updated
+2026-10-22 13:23:35.474 ts: wg: [v2] Routine: receive incoming receiveDERP - started
+2026-10-22 13:23:35.475 ts: wg: [v2] Interface state was Down, requested Up, now Up
+2026-10-22 13:23:35.476 ts: wg: [v2] Routine: receive incoming mkReceiveFunc - started
+2026-10-22 13:23:35.476 ts: wg: [v2] Routine: receive incoming mkReceiveFunc - started
+2026-10-22 13:23:35.477 ts: Bringing router up...
+2026-10-22 13:23:35.478 ts: [v1] warning: fakeRouter.Up: not implemented.
+2026-10-22 13:23:35.480 ts: Clearing router settings...
+2026-10-22 13:23:35.480 ts: [v1] warning: fakeRouter.Set: not implemented.
+2026-10-22 13:23:35.481 ts: Starting network monitor...
+2026-10-22 13:23:35.482 ts: Engine created.
+2026-10-22 13:23:35.485 tsnet: tsnet running state path /data/tailscale/state/tailscaled.state
+2026-10-22 13:23:35.492 ts: pm: migrating "_daemon" profile to new format
+2026-10-22 13:23:35.498 ts: logpolicy: using UserCacheDir, "/data/tailscale/.cache/Tailscale"
+2026-10-22 13:23:35.499 ts: linkChange: in state NoState; PAC or proxyConfig changed; updating routes
+2026-10-22 13:23:35.500 ts: [v1] netmap packet filter: (not ready yet)
+2026-10-22 13:23:35.502 tsnet: tsnet starting with hostname "ps5", varRoot "/data/tailscale/state"
+2026-10-22 13:23:35.503 ts: Start
+2026-10-22 13:23:35.504 ts: ipnext: active extensions: acme, taildrop
+2026-10-22 13:23:35.505 ts: [v JSON]1{"Hostinfo":{"IPNVersion":"1.104.0-dev20261022-gca3d414b5","BackendLogID":"f0ba3ea6a7fbcfd2c9c5f8f9c2a858e884b056d2888b47ca23e6e8fbb4b27b0e","OS":"freebsd","OSVersion":"0.0-prototype","Package":"tsnet","Machine":"amd64","GoArch":"amd64","GoArchVar":"v1","GoVersion":"go1.27.1","Userspace":true,"UserspaceRouter":true,"AppConnector":false,"StateEncrypted":false}}
+2026-10-22 13:23:35.506 ts: Start: updated prefs: Prefs{ra=false dns=true want=true statefulFiltering=false host="ps5" update=check Persist=nil}, reason: [opts.UpdatePrefs]
+2026-10-22 13:23:35.507 ts: generating new machine key
+2026-10-22 13:23:35.518 ts: machine key written to store
+2026-10-22 13:23:35.519 ts: profile data directory: profile not found
+2026-10-22 13:23:35.520 ts: control: [v1] HostInfo: {"IPNVersion":"1.104.0-dev20261022-gca3d414b5","BackendLogID":"f0ba3ea6a7fbcfd2c9c5f8f9c2a858e884b056d2888b47ca23e6e8fbb4b27b0e","OS":"freebsd","OSVersion":"0.0-prototype","Package":"tsnet","Hostname":"ps5","Machine":"amd64","GoArch":"amd64","GoArchVar":"v1","GoVersion":"go1.27.1","Services":[{"Proto":"peerapi-dns-proxy","Port":1}],"Userspace":true,"UserspaceRouter":true,"AppConnector":false,"StateEncrypted":false}
+2026-10-22 13:23:35.521 ts: Backend: logs: be:f0ba3ea6a7fbcfd2c9c5f8f9c2a858e884b056d2888b47ca23e6e8fbb4b27b0e fe:
+2026-10-22 13:23:35.521 ts: control: [v1] authRoutine: loggedIn=false; goal=nil paused=false
+2026-10-22 13:23:35.522 ts: control: [v1] mapRoutine: loggedIn=false
+2026-10-22 13:23:35.523 ts: Switching ipn state NoState -> NeedsLogin (WantRunning=true, nm=false)
+2026-10-22 13:23:35.524 ts: health(warnable=warming-up): error: Tailscale is starting. Please wait.
+2026-10-22 13:23:35.524 ts: blockEngineUpdates(true)
+2026-10-22 13:23:35.525 ts: wgengine: Reconfig: configuring router
+2026-10-22 13:23:35.526 ts: [v1] warning: fakeRouter.Set: not implemented.
+2026-10-22 13:23:35.527 ts: wgengine: Reconfig: user dialer
+2026-10-22 13:23:35.528 ts: wgengine: Reconfig: configuring DNS
+2026-10-22 13:23:35.529 ts: dns: Set: {DefaultResolvers:[] Routes:{} SearchDomains:[] Hosts:0}
+2026-10-22 13:23:35.530 ts: dns: Resolvercfg: {Routes:{} Hosts:0 LocalDomains:[]}
+2026-10-22 13:23:35.531 ts: dns: OScfg: {}
+2026-10-22 13:23:35.532 ts: [v1] wgengine: Reconfig done
+2026-10-22 13:23:35.534 tsnet: LocalBackend state is NeedsLogin; running StartLoginInteractive...
+2026-10-22 13:23:35.535 ts: StartLoginInteractiveAs(""): url=false
+2026-10-22 13:23:35.536 ts: control: client.Login(10)
+2026-10-22 13:23:35.537 ts: control: [v1] authRoutine: context done.
+2026-10-22 13:23:35.538 state:  -> NeedsLogin
+2026-10-22 13:23:35.538 ts: control: [v1] authRoutine: loggedIn=false; wantLoggedIn=true
+2026-10-22 13:23:35.538 ts: control: [v1] mapRoutine: context done.
+2026-10-22 13:23:35.539 ts: control: [v1] direct.TryLogin(flags=10)
+2026-10-22 13:23:35.540 ts: control: [v1] mapRoutine: loggedIn=false
+2026-10-22 13:23:35.540 ts: control: LoginInteractive -> regen=true
+2026-10-22 13:23:35.541 ts: control: doLogin(regen=true, hasUrl=false)
+2026-10-22 13:23:40.524 ts: health(warnable=warming-up): ok
+2026-10-22 13:23:45.543 ts: control: trying bootstrapDNS("derp2f.tailscale.com", "<public-ip>") for "controlplane.tailscale.com" ...
+2026-10-22 13:23:45.950 ts: control: bootstrapDNS("derp2f.tailscale.com", "<public-ip>") for "controlplane.tailscale.com" = [<public-ip> 2606:b740:49::114 2606:b740:49::110 <public-ip> <public-ip> <public-ip> 2606:b740:49::104 <public-ip> 2606:b740:49::107 <public-ip> 2606:b740:49::103 <public-ip> 2606:b740:49::115 <public-ip> 2606:b740:49::102 2606:b740:49::106]
+2026-10-22 13:23:46.766 ts: control: control server key from https://controlplane.tailscale.com: ts2021=[fSeS+], legacy=[nlFWp]
+2026-10-22 13:23:46.767 ts: control: Generating a new nodekey.
+2026-10-22 13:23:46.769 ts: control: RegisterReq: onode= node=[Qk34S] fup=false nks=false
+2026-10-22 13:23:46.770 ts: control: [v1] creating new noise client
+2026-10-22 13:23:47.834 ts: control: RegisterReq: got response; nodeKeyExpired=false, machineAuthorized=false; authURL=true
+2026-10-22 13:23:47.835 ts: control: AuthURL is https://login.tailscale.com/a/<removed>
+2026-10-22 13:23:47.835 ts: control: [v1] sendStatus: authRoutine-url: loggedIn=false inMapPoll=false
+2026-10-22 13:23:47.836 ts: control: [v1] authRoutine: loggedIn=false; wantLoggedIn=true
+2026-10-22 13:23:47.837 ts: control: [v1] direct.WaitLoginURL
+2026-10-22 13:23:47.838 ts: Received auth URL: https://login.tailsc...
+2026-10-22 13:23:47.839 ts: control: doLogin(regen=false, hasUrl=true)
+2026-10-22 13:23:47.839 ts: popBrowserAuthNow(""): url=true, key-expired=false
+2026-10-22 13:23:47.840 ts: control: RegisterReq: onode= node=[Qk34S] fup=true nks=false
+2026-10-22 13:23:47.840 ts: [v1] authReconfig: blocked, skipping.
+2026-10-22 13:23:47.840 login URL: https://login.tailscale.com/a/<removed>
+2026-10-22 13:23:49.976 settings changed from the status page
+2026-10-22 13:23:49.977 starting Tailscale again: the coordination server is now https://headscale.jayahn.xyz
+2026-10-22 13:23:49.979 ts: control: client.Shutdown ...
+2026-10-22 13:23:49.980 ts: control: updateRoutine: exiting
+2026-10-22 13:23:49.980 ts: control: [v1] mapRoutine: context done.
+2026-10-22 13:23:49.981 ts: control: [v1] WaitLoginURL: register request: Post "https://controlplane.tailscale.com/machine/register": context canceled
+2026-10-22 13:23:49.982 ts: control: mapRoutine: exiting
+2026-10-22 13:23:49.982 ts: control: authRoutine: exiting
+2026-10-22 13:23:49.983 ts: control: Client.Shutdown done.
+2026-10-22 13:23:49.984 ts: ipnext: work queue shutdown failed: execqueue shut down
+2026-10-22 13:23:49.986 ts: wg: [v2] Routine: receive incoming mkReceiveFunc - stopped
+2026-10-22 13:23:49.986 ts: [v1] warning: fakeRouter.Close: not implemented.
+2026-10-22 13:23:49.987 ts: wg: [v2] Routine: receive incoming mkReceiveFunc - stopped
+2026-10-22 13:23:49.987 ts: wg: [v2] Device closing
+2026-10-22 13:23:49.988 ts: wg: [v2] Routine: receive incoming receiveDERP - stopped
+2026-10-22 13:23:49.989 ts: wg: [v2] Device closed
+2026-10-22 13:23:54.979 ts: logtail: dial "log.tailscale.com:443" failed: dial tcp: lookup log.tailscale.com: operation was canceled (in 19.52s), trying bootstrap...
+2026-10-22 13:23:54.985 ts: monitor: devd dial error: dial unixpacket /var/run/devd.seqpacket.pipe: connect: no such file or directory, falling back to polling method
+2026-10-22 13:23:54.993 ts: [v1] using fake (no-op) tun device
+2026-10-22 13:23:54.994 ts: [v1] using fake (no-op) OS network configurator
+2026-10-22 13:23:54.995 ts: [v1] using fake (no-op) DNS configurator
+2026-10-22 13:23:54.996 ts: dns: using dns.noopManager
+2026-10-22 13:23:54.997 ts: link state: interfaces.State{defaultRoute=wlan0 ifs={wlan0:[192.168.0.96/24 llu6]} v4=true v6=false}
+2026-10-22 13:23:54.998 ts: magicsock: failed to set UDP read buffer size to 7340032: set udp6 [::]:57359: setsockopt: no buffer space available
+2026-10-22 13:23:54.999 ts: magicsock: failed to set UDP write buffer size to 7340032: set udp6 [::]:57359: setsockopt: no buffer space available
+2026-10-22 13:23:55.003 ts: magicsock: failed to set UDP read buffer size to 7340032: set udp4 0.0.0.0:52501: setsockopt: no buffer space available
+2026-10-22 13:23:55.004 ts: magicsock: failed to set UDP write buffer size to 7340032: set udp4 0.0.0.0:52501: setsockopt: no buffer space available
+2026-10-22 13:23:55.005 ts: magicsock: disco key = d:83479843dff13644
+2026-10-22 13:23:55.006 ts: Creating WireGuard device...
+2026-10-22 13:23:55.008 ts: Bringing WireGuard device up...
+2026-10-22 13:23:55.009 ts: wg: [v2] UDP bind has been updated
+2026-10-22 13:23:55.010 ts: wg: [v2] Routine: receive incoming mkReceiveFunc - started
+2026-10-22 13:23:55.010 ts: wg: [v2] Interface state was Down, requested Up, now Up
+2026-10-22 13:23:55.011 ts: wg: [v2] Routine: receive incoming mkReceiveFunc - started
+2026-10-22 13:23:55.011 ts: wg: [v2] Routine: receive incoming receiveDERP - started
+2026-10-22 13:23:55.012 ts: Bringing router up...
+2026-10-22 13:23:55.013 ts: [v1] warning: fakeRouter.Up: not implemented.
+2026-10-22 13:23:55.014 ts: Clearing router settings...
+2026-10-22 13:23:55.015 ts: [v1] warning: fakeRouter.Set: not implemented.
+2026-10-22 13:23:55.016 ts: Starting network monitor...
+2026-10-22 13:23:55.017 ts: Engine created.
+2026-10-22 13:23:55.019 tsnet: tsnet running state path /data/tailscale/state/tailscaled.state
+2026-10-22 13:23:55.020 ts: pm: migrating "_daemon" profile to new format
+2026-10-22 13:23:55.021 ts: logpolicy: using UserCacheDir, "/data/tailscale/.cache/Tailscale"
+2026-10-22 13:23:55.022 ts: linkChange: in state NoState; PAC or proxyConfig changed; updating routes
+2026-10-22 13:23:55.023 ts: [v1] netmap packet filter: (not ready yet)
+2026-10-22 13:23:55.025 tsnet: tsnet starting with hostname "ps5", varRoot "/data/tailscale/state"
+2026-10-22 13:23:55.026 ts: Start
+2026-10-22 13:23:55.027 ts: ipnext: active extensions: acme, taildrop
+2026-10-22 13:23:55.028 ts: [v JSON]1{"Hostinfo":{"IPNVersion":"1.104.0-dev20261022-gca3d414b5","BackendLogID":"f0ba3ea6a7fbcfd2c9c5f8f9c2a858e884b056d2888b47ca23e6e8fbb4b27b0e","OS":"freebsd","OSVersion":"0.0-prototype","Package":"tsnet","Machine":"amd64","GoArch":"amd64","GoArchVar":"v1","GoVersion":"go1.27.1","Userspace":true,"UserspaceRouter":true,"AppConnector":false,"StateEncrypted":false}}
+2026-10-22 13:23:55.029 ts: Start: updated prefs: Prefs{ra=false dns=true want=true statefulFiltering=false url="https://headscale.jayahn.xyz" host="ps5" update=check Persist=nil}, reason: [opts.UpdatePrefs]
+2026-10-22 13:23:55.030 ts: profile data directory: profile not found
+2026-10-22 13:23:55.031 ts: control: [v1] HostInfo: {"IPNVersion":"1.104.0-dev20261022-gca3d414b5","BackendLogID":"f0ba3ea6a7fbcfd2c9c5f8f9c2a858e884b056d2888b47ca23e6e8fbb4b27b0e","OS":"freebsd","OSVersion":"0.0-prototype","Package":"tsnet","Hostname":"ps5","Machine":"amd64","GoArch":"amd64","GoArchVar":"v1","GoVersion":"go1.27.1","Services":[{"Proto":"peerapi-dns-proxy","Port":1}],"Userspace":true,"UserspaceRouter":true,"AppConnector":false,"StateEncrypted":false}
+2026-10-22 13:23:55.032 ts: Backend: logs: be:f0ba3ea6a7fbcfd2c9c5f8f9c2a858e884b056d2888b47ca23e6e8fbb4b27b0e fe:
+2026-10-22 13:23:55.033 ts: control: [v1] authRoutine: loggedIn=false; goal=nil paused=false
+2026-10-22 13:23:55.034 ts: control: [v1] mapRoutine: loggedIn=false
+2026-10-22 13:23:55.035 ts: Switching ipn state NoState -> NeedsLogin (WantRunning=true, nm=false)
+2026-10-22 13:23:55.035 ts: health(warnable=warming-up): error: Tailscale is starting. Please wait.
+2026-10-22 13:23:55.036 ts: blockEngineUpdates(true)
+2026-10-22 13:23:55.037 ts: wgengine: Reconfig: configuring router
+2026-10-22 13:23:55.038 ts: [v1] warning: fakeRouter.Set: not implemented.
+2026-10-22 13:23:55.039 ts: wgengine: Reconfig: user dialer
+2026-10-22 13:23:55.040 ts: wgengine: Reconfig: configuring DNS
+2026-10-22 13:23:55.041 ts: dns: Set: {DefaultResolvers:[] Routes:{} SearchDomains:[] Hosts:0}
+2026-10-22 13:23:55.042 ts: dns: Resolvercfg: {Routes:{} Hosts:0 LocalDomains:[]}
+2026-10-22 13:23:55.043 ts: dns: OScfg: {}
+2026-10-22 13:23:55.044 ts: [v1] wgengine: Reconfig done
+2026-10-22 13:23:55.046 tsnet: LocalBackend state is NeedsLogin; running StartLoginInteractive...
+2026-10-22 13:23:55.047 ts: StartLoginInteractiveAs(""): url=false
+2026-10-22 13:23:55.048 ts: control: client.Login(10)
+2026-10-22 13:23:55.049 Tailscale is running on the new settings
+2026-10-22 13:23:55.049 ts: control: [v1] mapRoutine: context done.
+2026-10-22 13:23:55.049 ts: control: [v1] authRoutine: context done.
+2026-10-22 13:23:55.050 ts: control: [v1] mapRoutine: loggedIn=false
+2026-10-22 13:23:55.052 ts: control: [v1] authRoutine: loggedIn=false; wantLoggedIn=true
+2026-10-22 13:23:55.053 ts: control: [v1] direct.TryLogin(flags=10)
+2026-10-22 13:23:55.054 ts: control: LoginInteractive -> regen=true
+2026-10-22 13:23:55.055 ts: control: doLogin(regen=true, hasUrl=false)
+2026-10-22 13:24:00.035 ts: health(warnable=warming-up): ok
+2026-10-22 13:24:05.056 ts: control: trying bootstrapDNS("derp4d.tailscale.com", "<public-ip>") for "headscale.jayahn.xyz" ...
+2026-10-22 13:24:05.808 ts: control: trying bootstrapDNS("derp4e.tailscale.com", "2a03:b0c0:3:d0::29:9001") for "headscale.jayahn.xyz" ...
+2026-10-22 13:24:05.809 ts: control: bootstrapDNS("derp4e.tailscale.com", "2a03:b0c0:3:d0::29:9001") for "headscale.jayahn.xyz" error: Get "https://derp4e.tailscale.com/bootstrap-dns?q=headscale.jayahn.xyz": dial tcp [2a03:b0c0:3:d0::29:9001]:443: connect: no route to host
+2026-10-22 13:24:05.810 ts: control: trying bootstrapDNS("derp1e.tailscale.com", "<public-ip>") for "headscale.jayahn.xyz" ...
+2026-10-22 13:24:06.409 ts: control: trying bootstrapDNS("derp4d.tailscale.com", "2a03:b0c0:3:d0::1501:b001") for "headscale.jayahn.xyz" ...
+2026-10-22 13:24:06.410 ts: control: bootstrapDNS("derp4d.tailscale.com", "2a03:b0c0:3:d0::1501:b001") for "headscale.jayahn.xyz" error: Get "https://derp4d.tailscale.com/bootstrap-dns?q=headscale.jayahn.xyz": dial tcp [2a03:b0c0:3:d0::1501:b001]:443: connect: no route to host
+2026-10-22 13:24:06.411 ts: control: trying bootstrapDNS("derp9b.tailscale.com", "<public-ip>") for "headscale.jayahn.xyz" ...
+2026-10-22 13:24:06.913 ts: control: trying bootstrapDNS("derp1e.tailscale.com", "2604:a880:800:10::873:4001") for "headscale.jayahn.xyz" ...
+2026-10-22 13:24:06.914 ts: control: bootstrapDNS("derp1e.tailscale.com", "2604:a880:800:10::873:4001") for "headscale.jayahn.xyz" error: Get "https://derp1e.tailscale.com/bootstrap-dns?q=headscale.jayahn.xyz": dial tcp [2604:a880:800:10::873:4001]:443: connect: no route to host
+2026-10-22 13:24:06.915 ts: control: trying bootstrapDNS("derp4e.tailscale.com", "<public-ip>") for "headscale.jayahn.xyz" ...
+2026-10-22 13:24:07.660 ts: control: trying bootstrapDNS("derp8b.tailscale.com", "2a03:b0c0:1:d0::ec1:e001") for "headscale.jayahn.xyz" ...
+2026-10-22 13:24:07.661 ts: control: bootstrapDNS("derp8b.tailscale.com", "2a03:b0c0:1:d0::ec1:e001") for "headscale.jayahn.xyz" error: Get "https://derp8b.tailscale.com/bootstrap-dns?q=headscale.jayahn.xyz": dial tcp [2a03:b0c0:1:d0::ec1:e001]:443: connect: no route to host
+2026-10-22 13:24:07.662 ts: control: trying bootstrapDNS("derp8b.tailscale.com", "<public-ip>") for "headscale.jayahn.xyz" ...
+2026-10-22 13:24:08.406 ts: control: trying bootstrapDNS("derp7.tailscale.com", "2401:c080:1000:467f:5400:2ff:feee:22aa") for "headscale.jayahn.xyz" ...
+2026-10-22 13:24:08.408 ts: control: bootstrapDNS("derp7.tailscale.com", "2401:c080:1000:467f:5400:2ff:feee:22aa") for "headscale.jayahn.xyz" error: Get "https://derp7.tailscale.com/bootstrap-dns?q=headscale.jayahn.xyz": dial tcp [2401:c080:1000:467f:5400:2ff:feee:22aa]:443: connect: no route to host
+2026-10-22 13:24:08.409 ts: control: trying bootstrapDNS("derp2f.tailscale.com", "<public-ip>") for "headscale.jayahn.xyz" ...
+2026-10-22 13:24:08.810 ts: control: trying bootstrapDNS("derp11.tailscale.com", "2600:1f1e:ee4:5611:ec5c:1736:d43b:a454") for "headscale.jayahn.xyz" ...
+2026-10-22 13:24:08.811 ts: control: bootstrapDNS("derp11.tailscale.com", "2600:1f1e:ee4:5611:ec5c:1736:d43b:a454") for "headscale.jayahn.xyz" error: Get "https://derp11.tailscale.com/bootstrap-dns?q=headscale.jayahn.xyz": dial tcp [2600:1f1e:ee4:5611:ec5c:1736:d43b:a454]:443: connect: no route to host
+2026-10-22 13:24:08.812 ts: control: [v1] TryLogin: fetch control key: Get "https://headscale.jayahn.xyz/key?v=148": failed to resolve "headscale.jayahn.xyz": no DNS fallback candidates remain for "headscale.jayahn.xyz"
+2026-10-22 13:24:08.812 ts: health(warnable=login-state): error: You are logged out. The last login error was: fetch control key: Get "https://headscale.jayahn.xyz/key?v=148": failed to resolve "headscale.jayahn.xyz": no DNS fallback candidates remain for "headscale.jayahn.xyz"
+2026-10-22 13:24:08.813 ts: control: [v1] sendStatus: authRoutine-report: loggedIn=false inMapPoll=false
+2026-10-22 13:24:08.814 ts: control: authRoutine: [v1] backoff: 6 msec
+2026-10-22 13:24:08.814 ts: Received error: fetch control key: Get "https://headscale.jayahn.xyz/key?v=148": failed to resolve "headscale.jayahn.xyz": no DNS fallback candidates remain for "headscale.jayahn.xyz"
+2026-10-22 13:24:08.822 ts: control: [v1] authRoutine: loggedIn=false; wantLoggedIn=true
+2026-10-22 13:24:08.823 ts: control: [v1] direct.TryLogin(flags=10)
+2026-10-22 13:24:08.823 ts: control: LoginInteractive -> regen=true
+2026-10-22 13:24:08.824 ts: control: doLogin(regen=true, hasUrl=false)

@@ -6,13 +6,18 @@ import (
 	"crypto/tls"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
+	"net/url"
 	"slices"
+	"strings"
 	"sync"
 	"time"
 
+	"golang.org/x/net/dns/dnsmessage"
 	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 )
@@ -44,22 +49,33 @@ const (
 	dnsRecheckGood = 5 * time.Minute  // how long a working server is kept
 	dnsRecheckBad  = 20 * time.Second // how soon to look again when none works
 	dnsProbeWait   = 1200 * time.Millisecond
-	plainWait      = 2 * time.Second  // how long a plain server may take with a query
-	dohWait        = 3 * time.Second  // how long a DNS-over-HTTPS server may take
-	dnsPipeIdle    = 30 * time.Second // an idle resolver connection is dropped
-	dnsDoHLogGap   = time.Minute      // how often the fallback may be logged
+	plainWait      = 2 * time.Second         // how long a plain server may take with a query
+	dohWait        = 2500 * time.Millisecond // how long a DNS-over-HTTPS server may take
+	dnsPipeIdle    = 30 * time.Second        // an idle resolver connection is dropped
+	dnsDoHLogGap   = time.Minute             // how often the fallback for one name may be logged
+	dnsFixedLogGap = 10 * time.Minute        // how often a fixed address may be mentioned
 	maxDNSReply    = 4096
 )
+
+// The whole answer must fit inside the 5 s Go's resolver allows one attempt
+// at one name server: plain server (plainWait) first, then all DNS-over-HTTPS
+// endpoints at once (dohWait). Anything slower arrives after the resolver has
+// hung up and re-dialled, so the answer is never read — which is how a
+// serially-probed endpoint got a control lookup killed at exactly the DNS
+// cache's 10 s budget twice over.
 
 // dohEndpoints are the public DNS-over-HTTPS servers a query is taken to
 // when no plain server can answer it. The address is dialed directly and the
 // name is carried as the TLS server name, so the endpoint itself never needs
-// a name lookup of its own.
-var dohEndpoints = []struct {
+// a name lookup of its own. All of them are asked at once, not one after
+// another: the answer has to arrive while the resolver is still waiting.
+type dohEndpoint struct {
 	host string
 	path string
 	ips  []string
-}{
+}
+
+var dohEndpoints = []dohEndpoint{
 	{"cloudflare-dns.com", "/dns-query", []string{"1.1.1.1", "1.0.0.1"}},
 	{"dns.google", "/dns-query", []string{"8.8.8.8", "8.8.4.4"}},
 }
@@ -75,22 +91,36 @@ type dnsPicker struct {
 	plainAsk func(ctx context.Context, network, server string, query []byte) ([]byte, error)
 	// dohAsk asks a public DNS-over-HTTPS endpoint the same query.
 	dohAsk func(ctx context.Context, query []byte) ([]byte, error)
+	// endpoints overrides dohEndpoints for dohAsk. Tests use it.
+	endpoints []dohEndpoint
 
-	mu      sync.Mutex
-	server  string
-	working bool
-	checked time.Time
-	lastDoH time.Time
+	mu        sync.Mutex
+	server    string
+	working   bool
+	checked   time.Time
+	fixed     map[string]netip.Addr // names answered from set addresses
+	lastDoH   map[string]time.Time  // per-name: last time the fallback was logged
+	lastFixed map[string]time.Time  // per-name: last time a fixed address was logged
 }
 
 func newDNSPicker(logf func(format string, args ...any)) *dnsPicker {
-	return &dnsPicker{
+	p := &dnsPicker{
 		logf:       logf,
 		candidates: dnsCandidates,
 		probe:      dnsAnswers,
 		plainAsk:   dnsPlainAsk,
-		dohAsk:     dnsDoHAsk,
 	}
+	p.dohAsk = p.dohAskDefault
+	return p
+}
+
+// dohAskDefault is the real fallback: every endpoint asked at once.
+func (p *dnsPicker) dohAskDefault(ctx context.Context, query []byte) ([]byte, error) {
+	endpoints := p.endpoints
+	if endpoints == nil {
+		endpoints = dohEndpoints
+	}
+	return dohRace(ctx, query, endpoints, doHQuery)
 }
 
 // dnsCandidates returns the local DNS payload, the router and the public
@@ -194,16 +224,24 @@ func (p *dnsPicker) serveResolver(ctx context.Context, network, server string, c
 	}
 }
 
-// forwardQuery answers one query: from the plain server only when it has a
-// real answer for it. Every other outcome — silence, an error, or a
-// negative answer (NXDOMAIN, SERVFAIL, or "no error but no addresses") —
-// is asked over DNS-over-HTTPS instead: on networks that intercept plain
-// DNS, a negative answer is exactly what the interceptor hands back for a
-// name it refuses to resolve, and only a second opinion over HTTPS can
-// tell a lie from the truth. When DoH cannot answer either, the plain
-// server's reply (or a clean server failure) is returned, so nothing is
-// invented.
+// forwardQuery answers one query. A name with an address set on the status
+// page is answered from it at once, with no name server asked at all.
+// Otherwise the query goes to the plain server and is believed only when it
+// has a real answer for it. Every other outcome — silence, an error, or a
+// negative answer (NXDOMAIN, SERVFAIL, or "no error but no addresses") — is
+// asked over DNS-over-HTTPS instead: on networks that intercept plain DNS, a
+// negative answer is exactly what the interceptor hands back for a name it
+// refuses to resolve, and only a second opinion over HTTPS can tell a lie
+// from the truth. When DoH cannot answer either, the plain server's reply (or
+// a clean server failure) is returned, so nothing is invented.
 func (p *dnsPicker) forwardQuery(ctx context.Context, network, server string, query []byte) []byte {
+	name, _, haveName := dnsParseQuery(query)
+	if !haveName {
+		name = "(unreadable query)"
+	}
+	if reply, fixed := p.fixedReply(query); fixed {
+		return reply
+	}
 	reply, plainErr := p.plainAsk(ctx, network, server, query)
 	if plainErr == nil && dnsRcode(reply) == 0 && dnsAnswerCount(reply) > 0 {
 		return reply // the server really answered this name
@@ -216,16 +254,116 @@ func (p *dnsPicker) forwardQuery(ctx context.Context, network, server string, qu
 	}
 	viaDoH, dohErr := p.dohAsk(ctx, query)
 	reason := dnsPlainReason(plainErr, reply)
-	if dohErr == nil && len(viaDoH) >= 12 {
+	if dohErr == nil {
 		copy(viaDoH[0:2], query[0:2]) // the answer must carry this query's id
-		p.logDoH(server, reason, nil)
+		p.logDoH(name, server, reason, nil)
 		return viaDoH
 	}
-	p.logDoH(server, reason, dohErr)
+	p.logDoH(name, server, reason, dohErr)
 	if plainErr == nil {
 		return reply // nothing better available
 	}
 	return dnsServfail(query)
+}
+
+// setFixedNames sets the names that are answered straight from an address
+// given on the status page, without asking any name server — for networks
+// whose DNS refuses to resolve a name this app needs, usually the user's own
+// coordination server. Entries whose address cannot be read are skipped; the
+// settings form has already refused them.
+func (p *dnsPicker) setFixedNames(m map[string]string) {
+	fixed := make(map[string]netip.Addr, len(m))
+	for name, addr := range m {
+		if a, err := netip.ParseAddr(strings.TrimSpace(addr)); err == nil {
+			fixed[dnsFixName(name)] = a
+		}
+	}
+	p.mu.Lock()
+	p.fixed = fixed
+	p.mu.Unlock()
+}
+
+// fixedReply answers query from a fixed address, reporting whether the name
+// is one of them. The right record kind gets the address; the wrong one gets
+// a clean empty answer, so Go's resolver finds the name and stops asking.
+func (p *dnsPicker) fixedReply(query []byte) ([]byte, bool) {
+	p.mu.Lock()
+	fixed := p.fixed
+	p.mu.Unlock()
+	if len(fixed) == 0 {
+		return nil, false
+	}
+	name, qs, ok := dnsParseQuery(query)
+	if !ok {
+		return nil, false
+	}
+	addr, mapped := fixed[name]
+	if !mapped {
+		return nil, false
+	}
+	var addrs []netip.Addr
+	switch {
+	case qs[0].Type == dnsmessage.TypeA && addr.Is4():
+		addrs = append(addrs, addr)
+	case qs[0].Type == dnsmessage.TypeAAAA && addr.Is6():
+		addrs = append(addrs, addr)
+	}
+	p.logFixed(name, addr, len(addrs) > 0)
+	return dnsBuildReply(query, qs, addrs), true
+}
+
+// dnsFixName is the key form for fixed names: lower case, no trailing dot.
+func dnsFixName(s string) string {
+	return strings.TrimSuffix(strings.ToLower(strings.TrimSpace(s)), ".")
+}
+
+// dnsParseQuery reads a query's question so it can be answered or checked.
+func dnsParseQuery(query []byte) (name string, qs []dnsmessage.Question, ok bool) {
+	var pr dnsmessage.Parser
+	if _, err := pr.Start(query); err != nil {
+		return "", nil, false
+	}
+	qs, err := pr.AllQuestions()
+	if err != nil || len(qs) == 0 {
+		return "", nil, false
+	}
+	return dnsFixName(qs[0].Name.String()), qs, true
+}
+
+// dnsBuildReply builds a response to query, echoing its question, with
+// addrs (possibly none) as the answers.
+func dnsBuildReply(query []byte, qs []dnsmessage.Question, addrs []netip.Addr) []byte {
+	var fail = func() []byte { return dnsServfail(query) }
+	b := dnsmessage.NewBuilder(nil, dnsmessage.Header{ID: binary.BigEndian.Uint16(query[:2]), RecursionDesired: true, RecursionAvailable: true, Response: true})
+	b.EnableCompression()
+	if err := b.StartQuestions(); err != nil {
+		return fail()
+	}
+	for _, q := range qs {
+		if err := b.Question(q); err != nil {
+			return fail()
+		}
+	}
+	if err := b.StartAnswers(); err != nil {
+		return fail()
+	}
+	for _, a := range addrs {
+		h := dnsmessage.ResourceHeader{Name: qs[0].Name, Class: dnsmessage.ClassINET, TTL: 300}
+		var err error
+		if a.Is4() {
+			err = b.AResource(h, dnsmessage.AResource{A: a.As4()})
+		} else {
+			err = b.AAAAResource(h, dnsmessage.AAAAResource{AAAA: a.As16()})
+		}
+		if err != nil {
+			return fail()
+		}
+	}
+	out, err := b.Finish()
+	if err != nil {
+		return fail()
+	}
+	return out
 }
 
 // dnsPlainReason says why a plain server's answer was not believed.
@@ -250,26 +388,59 @@ func dnsAnswerCount(reply []byte) int {
 	return int(binary.BigEndian.Uint16(reply[6:8]))
 }
 
-// logDoH mentions the fallback in the log, without repeating it every
-// few seconds while a resolver is misbehaving. dohErr is nil when the
-// query went over HTTPS and came back; otherwise it says why that failed
-// too, which is worth being able to see from a diagnostics file.
-func (p *dnsPicker) logDoH(server, plainReason string, dohErr error) {
+// logDoH mentions the fallback for one name in the log, without repeating it
+// every few seconds while a resolver is misbehaving. The name is in the line:
+// a diagnostics file has to say which lookup needed the fallback and which
+// one the network is really refusing. dohErr is nil when the query went over
+// HTTPS and came back; otherwise it says why that failed too.
+func (p *dnsPicker) logDoH(name, server, plainReason string, dohErr error) {
 	p.mu.Lock()
 	stamp := time.Now()
-	fresh := stamp.Sub(p.lastDoH) >= dnsDoHLogGap
+	if p.lastDoH == nil {
+		p.lastDoH = map[string]time.Time{}
+	}
+	fresh := stamp.Sub(p.lastDoH[name]) >= dnsDoHLogGap
 	if fresh {
-		p.lastDoH = stamp
+		p.lastDoH[name] = stamp
+		for k, t := range p.lastDoH {
+			if stamp.Sub(t) > 10*time.Minute {
+				delete(p.lastDoH, k)
+			}
+		}
 	}
 	p.mu.Unlock()
 	if !fresh {
 		return
 	}
 	if dohErr != nil {
-		p.logf("DNS: %s could not answer a query (%s); DNS-over-HTTPS failed too (%v)", server, plainReason, dohErr)
+		p.logf("DNS: %s: %s could not answer (%s); DNS-over-HTTPS failed too (%v)", name, server, plainReason, dohErr)
 		return
 	}
-	p.logf("DNS: %s could not answer a query (%s); asked over HTTPS instead", server, plainReason)
+	p.logf("DNS: %s: %s could not answer (%s); asked over HTTPS instead", name, server, plainReason)
+}
+
+// logFixed notes that a name was answered from an address set on the status
+// page. It says so once every so often per name, so the diagnostics show the
+// path a lookup took without filling the log.
+func (p *dnsPicker) logFixed(name string, addr netip.Addr, used bool) {
+	p.mu.Lock()
+	stamp := time.Now()
+	if p.lastFixed == nil {
+		p.lastFixed = map[string]time.Time{}
+	}
+	fresh := stamp.Sub(p.lastFixed[name]) >= dnsFixedLogGap
+	if fresh {
+		p.lastFixed[name] = stamp
+	}
+	p.mu.Unlock()
+	if !fresh {
+		return
+	}
+	if used {
+		p.logf("DNS: %s: answered from the address you set (%v)", name, addr)
+	} else {
+		p.logf("DNS: %s: no address of that record kind is set (you set %v); answered empty", name, addr)
+	}
 }
 
 // dnsRcode is the reply's return code; 2 means SERVFAIL, a server that
@@ -334,26 +505,117 @@ func dnsPlainAsk(ctx context.Context, network, server string, query []byte) ([]b
 	return buf[:n], nil
 }
 
-// dnsDoHAsk asks a public DNS-over-HTTPS endpoint with the wire-format
-// query (RFC 8484) and returns its reply. Each endpoint's published
-// addresses are dialed directly, carrying the endpoint's name as the TLS
-// server name, so no name lookup is needed to reach the resolvers.
-func dnsDoHAsk(ctx context.Context, query []byte) ([]byte, error) {
-	var lastErr error
-	for _, ep := range dohEndpoints {
+// dohRace asks every DNS-over-HTTPS endpoint at once (RFC 8484) and returns
+// the first proper answer. Serial probing was the bug: with a plain server
+// that takes its full 2 s to say nothing, an endpoint probed one after
+// another could not answer inside the 5 s Go's resolver gives a single
+// attempt, so every attempt died at the deadline and the control lookup
+// failed at exactly the DNS cache's outer timeout, twice — and fell through
+// to the DERP bootstrap DNS, which cannot know a private server's name.
+//
+// Each endpoint's published addresses are dialed directly, carrying the
+// endpoint's name as the TLS server name, so no name lookup is needed to
+// reach the resolvers. An endpoint that answers with anything other than a
+// real answer — an interceptor's error page delivered over port 443, say —
+// counts as failing: a lie is not an answer.
+func dohRace(ctx context.Context, query []byte, endpoints []dohEndpoint, ask func(ctx context.Context, host, path, ip string, query []byte) ([]byte, error)) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, dohWait)
+	defer cancel()
+	type outcome struct {
+		reply []byte
+		err   error
+	}
+	ch := make(chan outcome, 16)
+	n := 0
+	for _, ep := range endpoints {
 		for _, ip := range ep.ips {
-			reply, err := doHQuery(ctx, ep.host, ep.path, ip, query)
-			if err != nil {
-				lastErr = err
-				continue
-			}
-			return reply, nil
+			n++
+			go func(ep dohEndpoint, ip string) {
+				reply, err := ask(ctx, ep.host, ep.path, ip, query)
+				if err == nil {
+					if perr := dnsAnswerProblems(query, reply, ep.host); perr != nil {
+						reply, err = nil, perr
+					}
+				}
+				ch <- outcome{reply, err}
+			}(ep, ip)
 		}
 	}
-	if lastErr == nil {
-		lastErr = errors.New("no DNS-over-HTTPS endpoints")
+	var errs []string
+	for range n {
+		o := <-ch
+		if o.err == nil {
+			return o.reply, nil
+		}
+		errs = append(errs, o.err.Error())
 	}
-	return nil, lastErr
+	if n == 0 {
+		return nil, errors.New("no DNS-over-HTTPS endpoints")
+	}
+	slices.Sort(errs)
+	return nil, errors.New(strings.Join(errs, "; "))
+}
+
+// dnsAnswerProblems reports why reply is not an answer to query that may be
+// handed to the resolver, naming the endpoint that sent it. A body that is
+// not a DNS message at all, a refusal, and an empty answer for a name the
+// whole point was to resolve all count as problems.
+func dnsAnswerProblems(query, reply []byte, from string) error {
+	var pr dnsmessage.Parser
+	h, err := pr.Start(reply)
+	if err != nil {
+		return fmt.Errorf("%s: not a DNS answer (%v)", from, err)
+	}
+	if !h.Response {
+		return fmt.Errorf("%s: sent a query, not an answer", from)
+	}
+	if h.RCode != dnsmessage.RCodeSuccess {
+		return fmt.Errorf("%s: answered %v", from, h.RCode)
+	}
+	qs, err := pr.AllQuestions()
+	if err != nil || len(qs) == 0 {
+		return fmt.Errorf("%s: answer without a question", from)
+	}
+	name, q, ok := dnsParseQuery(query)
+	if !ok || dnsFixName(qs[0].Name.String()) != name || qs[0].Type != q[0].Type {
+		return fmt.Errorf("%s: answer for another name or record kind", from)
+	}
+	answers := 0
+	for {
+		a, err := pr.Answer()
+		if err != nil {
+			break
+		}
+		if a.Header.Type == qs[0].Type {
+			answers++
+		}
+	}
+	if answers == 0 {
+		return fmt.Errorf("%s: answered with no addresses", from)
+	}
+	return nil
+}
+
+// checkControl resolves the coordination server's name as soon as it is
+// asked for, so a diagnostics file says at once whether the daemon can find
+// its own server instead of waiting for Tailscale to time out twice.
+func (p *dnsPicker) checkControl(controlURL string) {
+	if controlURL == "" {
+		return
+	}
+	u, err := url.Parse(controlURL)
+	if err != nil || u.Hostname() == "" {
+		return
+	}
+	host := u.Hostname()
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	addrs, err := net.DefaultResolver.LookupNetIP(ctx, "ip", host)
+	if err != nil {
+		p.logf("DNS: the coordination server %s cannot be resolved: %v", host, err)
+		return
+	}
+	p.logf("DNS: the coordination server %s resolves to %v", host, addrs)
 }
 
 func doHQuery(ctx context.Context, host, path, ip string, query []byte) ([]byte, error) {
