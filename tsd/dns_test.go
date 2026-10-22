@@ -258,9 +258,12 @@ func TestForwardQuery(t *testing.T) {
 	}
 }
 
-// A query through the connection handed to Go's resolver: the resolver
-// writes a DNS query, and an answer comes back with the right id, over both
-// UDP (datagram) and TCP (length-prefixed) framing.
+// A query through the connection handed to Go's resolver: every exchange on
+// such a connection is framed with a 2-byte length, on both networks (this
+// framing was once assumed to be tcp-only, which made every UDP answer
+// unreadable to Go and no picker reply — fixed names or DoH — ever land;
+// TestResolverEndToEnd is the regression for that). The answer comes back
+// with the id of the query, length-prefixed.
 func TestDialResolverConnection(t *testing.T) {
 	for _, network := range []string{"udp", "tcp"} {
 		p := &dnsPicker{
@@ -277,33 +280,75 @@ func TestDialResolverConnection(t *testing.T) {
 			t.Fatal(err)
 		}
 		q := dnsQuery(0xABCD, "example.com")
-		if network == "tcp" {
-			binary.Write(c, binary.BigEndian, uint16(len(q)))
+		binary.Write(c, binary.BigEndian, uint16(len(q)))
+		if _, err := c.Write(q); err != nil {
+			t.Fatalf("%s: write: %v", network, err)
 		}
-		c.Write(q)
 		c.SetReadDeadline(time.Now().Add(2 * time.Second))
-		var buf []byte
-		if network == "tcp" {
-			var l uint16
-			if err := binary.Read(c, binary.BigEndian, &l); err != nil {
-				t.Fatalf("tcp: length: %v", err)
-			}
-			buf = make([]byte, l)
-			if _, err := io.ReadFull(c, buf); err != nil {
-				t.Fatalf("tcp: body: %v", err)
-			}
-		} else {
-			raw := make([]byte, 1500)
-			n, err := c.Read(raw)
-			if err != nil {
-				t.Fatalf("%s: read: %v", network, err)
-			}
-			buf = raw[:n]
+		var l uint16
+		if err := binary.Read(c, binary.BigEndian, &l); err != nil {
+			t.Fatalf("%s: length: %v", network, err)
+		}
+		if int(l) < 12 {
+			t.Fatalf("%s: reply length %d", network, l)
+		}
+		buf := make([]byte, l)
+		if _, err := io.ReadFull(c, buf); err != nil {
+			t.Fatalf("%s: body: %v", network, err)
 		}
 		c.Close()
 		if dnsRcode(buf) != 0 || buf[0] != 0xAB || buf[1] != 0xCD {
 			t.Errorf("%s: bad reply % x", network, buf)
 		}
+	}
+}
+
+// The picker behind a real net.Resolver, the way Go actually drives it:
+// queries arrive length-prefixed with an EDNS0 record, and answers — from a
+// plain server or from a fixed address — must come back readable, so a
+// lookup returns addresses instead of timing out. This is the regression for
+// the framing bug that made every picker answer unreadable (fixed names
+// never fired; Cloudflare answered NOTIMP and dns.google 400 to the
+// malformed bytes forwarded as queries).
+func TestResolverEndToEnd(t *testing.T) {
+	p := &dnsPicker{
+		logf:       func(string, ...any) {},
+		candidates: func() []string { return []string{"1.1.1.1:53"} },
+		probe:      func(context.Context, string) bool { return true },
+		plainAsk: func(ctx context.Context, _, _ string, q []byte) ([]byte, error) {
+			name, qs, ok := dnsParseQuery(q)
+			if !ok {
+				t.Errorf("the plain server got an unreadable query (%d bytes, % x)", len(q), q)
+				return nil, errors.New("unreadable query")
+			}
+			if name != "answered.example" {
+				return noAnswerTo(q), nil
+			}
+			return dnsBuildReply(q, qs, []netip.Addr{netip.MustParseAddr("203.0.113.10")}), nil
+		},
+		dohAsk: func(ctx context.Context, q []byte) ([]byte, error) {
+			return nil, errors.New("do not fall back in this test")
+		},
+	}
+	p.setFixedNames(map[string]string{"fixed.example": "203.0.113.9"})
+	r := &net.Resolver{PreferGo: true, Dial: p.dial}
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+
+	addrs, err := r.LookupNetIP(ctx, "ip", "fixed.example")
+	if err != nil {
+		t.Fatalf("fixed name: %v", err)
+	}
+	if len(addrs) != 1 || addrs[0].String() != "203.0.113.9" {
+		t.Errorf("fixed name: got %v", addrs)
+	}
+
+	addrs, err = r.LookupNetIP(ctx, "ip", "answered.example")
+	if err != nil {
+		t.Fatalf("plain answer: %v", err)
+	}
+	if len(addrs) != 1 || addrs[0].String() != "203.0.113.10" {
+		t.Errorf("plain answer: got %v", addrs)
 	}
 }
 

@@ -187,36 +187,32 @@ func (p *dnsPicker) dial(ctx context.Context, network, _ string) (net.Conn, erro
 
 // serveResolver answers DNS on a connection handed to Go's resolver: read a
 // query, answer it, until the resolver is done with the connection.
+//
+// Go frames the exchange on a custom-Dial connection with a 2-byte length
+// prefix on EVERY network, writes and reads alike (verified against Go's
+// behaviour: an unprefixed answer on a "udp" pipe is never read and the
+// lookup dies in i/o timeout; the same answer with the prefix resolves at
+// once). So the prefix comes off on the way in and goes back on the way
+// out here, whatever the network claims; only the servers actually asked
+// over the real wire get the plain RFC 1035 bytes.
 func (p *dnsPicker) serveResolver(ctx context.Context, network, server string, c net.Conn) {
 	defer c.Close()
 	for {
 		c.SetReadDeadline(time.Now().Add(dnsPipeIdle))
-		var query []byte
-		if network == "tcp" {
-			var l uint16
-			if err := binary.Read(c, binary.BigEndian, &l); err != nil {
-				return
-			}
-			query = make([]byte, l)
-			if _, err := io.ReadFull(c, query); err != nil {
-				return
-			}
-		} else {
-			buf := make([]byte, 1500)
-			n, err := c.Read(buf)
-			if err != nil {
-				return
-			}
-			query = buf[:n]
+		var l uint16
+		if err := binary.Read(c, binary.BigEndian, &l); err != nil {
+			return
 		}
-		if len(query) < 12 {
-			continue
+		if l < 12 || int(l) > maxDNSReply {
+			return // not a framing Go's resolver uses; stop this connection
+		}
+		query := make([]byte, l)
+		if _, err := io.ReadFull(c, query); err != nil {
+			return
 		}
 		reply := p.forwardQuery(ctx, network, server, query)
-		if network == "tcp" {
-			if err := binary.Write(c, binary.BigEndian, uint16(len(reply))); err != nil {
-				return
-			}
+		if err := binary.Write(c, binary.BigEndian, uint16(len(reply))); err != nil {
+			return
 		}
 		if _, err := c.Write(reply); err != nil {
 			return
