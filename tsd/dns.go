@@ -1,9 +1,14 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/binary"
+	"errors"
+	"io"
 	"net"
+	"net/http"
 	"slices"
 	"sync"
 	"time"
@@ -12,12 +17,20 @@ import (
 )
 
 // Name lookups by the daemon itself: Tailscale's servers, GitHub for the
-// update check, whatever goes through the HTTP proxy.
+// update check, the coordination server, whatever goes through the HTTP
+// proxy.
 //
 // The PS5 has no resolv.conf, so Go asks 127.0.0.1:53. That only works on a
 // console that runs a DNS payload, which most jailbreak setups do and some do
 // not. Rather than depend on it, the daemon uses the first of these that
 // answers: the local DNS payload, the router, a public resolver.
+//
+// A resolver can also answer for most names and still fail for one, by
+// blocking or breaking it (SERVFAIL). A console whose router does that for a
+// private coordination server could never reach it, so every query that the
+// plain server cannot answer is asked again of a public DNS-over-HTTPS
+// endpoint. The console's own DNS settings are not touched: only this
+// process looks names up this way.
 
 // dnsLocal is where a DNS payload on the console listens. A variable so that
 // a test build can pretend there is none.
@@ -30,7 +43,25 @@ const (
 	dnsRecheckGood = 5 * time.Minute  // how long a working server is kept
 	dnsRecheckBad  = 20 * time.Second // how soon to look again when none works
 	dnsProbeWait   = 1200 * time.Millisecond
+	plainWait      = 2 * time.Second  // how long a plain server may take with a query
+	dohWait        = 3 * time.Second  // how long a DNS-over-HTTPS server may take
+	dnsPipeIdle    = 30 * time.Second // an idle resolver connection is dropped
+	dnsDoHLogGap   = time.Minute      // how often the fallback may be logged
+	maxDNSReply    = 4096
 )
+
+// dohEndpoints are the public DNS-over-HTTPS servers a query is taken to
+// when no plain server can answer it. The address is dialed directly and the
+// name is carried as the TLS server name, so the endpoint itself never needs
+// a name lookup of its own.
+var dohEndpoints = []struct {
+	host string
+	path string
+	ips  []string
+}{
+	{"cloudflare-dns.com", "/dns-query", []string{"1.1.1.1", "1.0.0.1"}},
+	{"dns.google", "/dns-query", []string{"8.8.8.8", "8.8.4.4"}},
+}
 
 type dnsPicker struct {
 	logf func(format string, args ...any)
@@ -38,15 +69,27 @@ type dnsPicker struct {
 	candidates func() []string
 	// probe reports whether a server answers queries.
 	probe func(ctx context.Context, server string) bool
+	// plainAsk forwards one wire-format query to a plain server. A variable
+	// so that tests can stand in for the network.
+	plainAsk func(ctx context.Context, network, server string, query []byte) ([]byte, error)
+	// dohAsk asks a public DNS-over-HTTPS endpoint the same query.
+	dohAsk func(ctx context.Context, query []byte) ([]byte, error)
 
 	mu      sync.Mutex
 	server  string
 	working bool
 	checked time.Time
+	lastDoH time.Time
 }
 
 func newDNSPicker(logf func(format string, args ...any)) *dnsPicker {
-	return &dnsPicker{logf: logf, candidates: dnsCandidates, probe: dnsAnswers}
+	return &dnsPicker{
+		logf:       logf,
+		candidates: dnsCandidates,
+		probe:      dnsAnswers,
+		plainAsk:   dnsPlainAsk,
+		dohAsk:     dnsDoHAsk,
+	}
 }
 
 // dnsCandidates returns the local DNS payload, the router and the public
@@ -100,11 +143,220 @@ func (p *dnsPicker) reset() {
 	p.mu.Unlock()
 }
 
-// dial is the resolver's Dial: whatever address Go wants to ask, the chosen
-// server is asked instead.
+// dial is the resolver's Dial. Whatever address Go wants to ask, the query
+// is answered here: first from the picked plain server, and when that fails
+// or cannot make sense of the name (SERVFAIL), from a public
+// DNS-over-HTTPS endpoint instead.
 func (p *dnsPicker) dial(ctx context.Context, network, _ string) (net.Conn, error) {
+	server := p.pick(ctx)
+	client, serverSide := net.Pipe()
+	go p.serveResolver(ctx, network, server, serverSide)
+	return client, nil
+}
+
+// serveResolver answers DNS on a connection handed to Go's resolver: read a
+// query, answer it, until the resolver is done with the connection.
+func (p *dnsPicker) serveResolver(ctx context.Context, network, server string, c net.Conn) {
+	defer c.Close()
+	for {
+		c.SetReadDeadline(time.Now().Add(dnsPipeIdle))
+		var query []byte
+		if network == "tcp" {
+			var l uint16
+			if err := binary.Read(c, binary.BigEndian, &l); err != nil {
+				return
+			}
+			query = make([]byte, l)
+			if _, err := io.ReadFull(c, query); err != nil {
+				return
+			}
+		} else {
+			buf := make([]byte, 1500)
+			n, err := c.Read(buf)
+			if err != nil {
+				return
+			}
+			query = buf[:n]
+		}
+		if len(query) < 12 {
+			continue
+		}
+		reply := p.forwardQuery(ctx, network, server, query)
+		if network == "tcp" {
+			if err := binary.Write(c, binary.BigEndian, uint16(len(reply))); err != nil {
+				return
+			}
+		}
+		if _, err := c.Write(reply); err != nil {
+			return
+		}
+	}
+}
+
+// forwardQuery answers one query: from the plain server when it can, over
+// DNS-over-HTTPS when it cannot. The last resort is a server-failure answer
+// of our own, so the resolver gets a clean failure instead of a hang.
+func (p *dnsPicker) forwardQuery(ctx context.Context, network, server string, query []byte) []byte {
+	reply, err := p.plainAsk(ctx, network, server, query)
+	if err == nil && dnsRcode(reply) != 2 {
+		return reply
+	}
+	if p.dohAsk == nil {
+		return dnsServfail(query)
+	}
+	viaDoH, dohErr := p.dohAsk(ctx, query)
+	if dohErr != nil || len(viaDoH) < 12 {
+		if err != nil {
+			return dnsServfail(query) // plain and DoH both failed
+		}
+		return reply // plain served it after all
+	}
+	copy(viaDoH[0:2], query[0:2]) // the answer must carry this query's id
+	p.logDoH(server, err)
+	return viaDoH
+}
+
+// logDoH mentions the fallback in the log, without repeating it every
+// few seconds while a resolver is misbehaving.
+func (p *dnsPicker) logDoH(server string, plainErr error) {
+	p.mu.Lock()
+	stamp := time.Now()
+	fresh := stamp.Sub(p.lastDoH) >= dnsDoHLogGap
+	if fresh {
+		p.lastDoH = stamp
+	}
+	p.mu.Unlock()
+	if !fresh {
+		return
+	}
+	reason := error(errSERVFAIL)
+	if plainErr != nil {
+		reason = plainErr
+	}
+	p.logf("DNS: %s could not answer a query (%v); asking over HTTPS instead", server, reason)
+}
+
+// errSERVFAIL is the reason logged when the plain server answered but
+// could not make the lookup itself.
+var errSERVFAIL = errors.New("answered SERVFAIL")
+
+// dnsRcode is the reply's return code; 2 means SERVFAIL, a server that
+// could not make the lookup even though it is answering for other names.
+func dnsRcode(reply []byte) int {
+	if len(reply) < 4 {
+		return 2
+	}
+	return int(reply[3] & 0x0f)
+}
+
+// dnsServfail builds a server-failure answer to query, echoing its id.
+func dnsServfail(query []byte) []byte {
+	reply := make([]byte, 12)
+	copy(reply, query[:12])
+	reply[2] = 0x81 // response, recursion available
+	reply[3] = 0x02 // SERVFAIL
+	return reply
+}
+
+// dnsPlainAsk forwards the wire-format query to a plain DNS server and
+// returns its reply.
+func dnsPlainAsk(ctx context.Context, network, server string, query []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, plainWait)
+	defer cancel()
 	var d net.Dialer
-	return d.DialContext(ctx, network, p.pick(ctx))
+	c, err := d.DialContext(ctx, network, server)
+	if err != nil {
+		return nil, err
+	}
+	defer c.Close()
+	if network == "tcp" {
+		if err := binary.Write(c, binary.BigEndian, uint16(len(query))); err != nil {
+			return nil, err
+		}
+	}
+	if _, err := c.Write(query); err != nil {
+		return nil, err
+	}
+	if network == "tcp" {
+		var l uint16
+		if err := binary.Read(c, binary.BigEndian, &l); err != nil {
+			return nil, err
+		}
+		if l < 12 || int(l) > maxDNSReply {
+			return nil, errors.New("bad DNS reply length")
+		}
+		reply := make([]byte, l)
+		if _, err := io.ReadFull(c, reply); err != nil {
+			return nil, err
+		}
+		return reply, nil
+	}
+	buf := make([]byte, maxDNSReply)
+	n, err := c.Read(buf)
+	if err != nil {
+		return nil, err
+	}
+	if n < 12 {
+		return nil, errors.New("short DNS reply")
+	}
+	return buf[:n], nil
+}
+
+// dnsDoHAsk asks a public DNS-over-HTTPS endpoint with the wire-format
+// query (RFC 8484) and returns its reply. Each endpoint's published
+// addresses are dialed directly, carrying the endpoint's name as the TLS
+// server name, so no name lookup is needed to reach the resolvers.
+func dnsDoHAsk(ctx context.Context, query []byte) ([]byte, error) {
+	var lastErr error
+	for _, ep := range dohEndpoints {
+		for _, ip := range ep.ips {
+			reply, err := doHQuery(ctx, ep.host, ep.path, ip, query)
+			if err != nil {
+				lastErr = err
+				continue
+			}
+			return reply, nil
+		}
+	}
+	if lastErr == nil {
+		lastErr = errors.New("no DNS-over-HTTPS endpoints")
+	}
+	return nil, lastErr
+}
+
+func doHQuery(ctx context.Context, host, path, ip string, query []byte) ([]byte, error) {
+	ctx, cancel := context.WithTimeout(ctx, dohWait)
+	defer cancel()
+	tr := &http.Transport{
+		ForceAttemptHTTP2: true,
+		TLSClientConfig:   &tls.Config{ServerName: host},
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, network, net.JoinHostPort(ip, "443"))
+		},
+	}
+	defer tr.CloseIdleConnections()
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://"+host+path, bytes.NewReader(query))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/dns-message")
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, maxDNSReply+1))
+	if err != nil {
+		return nil, err
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, errors.New(resp.Status)
+	}
+	if len(body) < 12 || len(body) > maxDNSReply {
+		return nil, errors.New("bad DNS-over-HTTPS reply")
+	}
+	return body, nil
 }
 
 // install makes every name lookup in the process go through the picker.
@@ -178,7 +430,7 @@ func (p *dnsPicker) describe() string {
 		host = server
 	}
 	if !working {
-		return "no server answers"
+		return "no plain server; using DNS-over-HTTPS"
 	}
 	switch {
 	case server == dnsLocal:

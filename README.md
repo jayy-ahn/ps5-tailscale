@@ -445,9 +445,13 @@ Left to do by hand:
   daemon looks names up itself: at a DNS payload on the console
   (`127.0.0.1:53`) if one is running, otherwise at your router, otherwise at
   a public resolver (1.1.1.1, 8.8.8.8, 9.9.9.9). The log says which one it
-  uses in a line starting with `DNS:`. If none answers, the console has no
-  working internet connection for payloads. The DNS server set in the PS5's
-  network settings plays no part. The status page shows the one in use under
+  uses in a line starting with `DNS:`. A query that none of those can
+  answer — a router that blocks or breaks one name, a network that
+  intercepts all plain DNS — is asked again over DNS-over-HTTPS
+  (`cloudflare-dns.com`, `dns.google`) over ordinary HTTPS, which such
+  networks cannot intercept; the log says so when that happens. The DNS
+  server set in the PS5's network settings plays no part either way: the
+  daemon never uses it. The status page shows what is in use under
   "Name lookups".
 - **A stream or Remote Play stutters.** Look at the device in the list on the
   status page and press **test**. "Relayed" means the two devices could not
@@ -481,7 +485,10 @@ Left to do by hand:
   not exposed to the tailnet.
 - With update checks on, the console contacts `api.github.com` twice a day.
 - Name lookups by the daemon go to the console's DNS payload if there is
-  one, otherwise to your router or a public resolver. They are only the
+  one, otherwise to your router or a public resolver; a query none of them
+  can answer is asked again over DNS-over-HTTPS (`cloudflare-dns.com` or
+  `dns.google`), so a network whose resolver blocks or breaks one name can
+  still reach its coordination server. They are only the
   daemon's own lookups (Tailscale's servers, GitHub, what you send through
   the HTTP proxy), not the console's.
 - An update is only installed when **Install** is pressed, and only if it

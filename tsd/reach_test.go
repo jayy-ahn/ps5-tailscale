@@ -146,7 +146,7 @@ func TestDNSDescribe(t *testing.T) {
 		}
 	}
 	p.working = false
-	if got := p.describe(); !strings.Contains(got, "no server") {
+	if got := p.describe(); !strings.Contains(got, "DNS-over-HTTPS") {
 		t.Errorf("not working: %q", got)
 	}
 }

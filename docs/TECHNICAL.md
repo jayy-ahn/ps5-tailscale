@@ -199,8 +199,14 @@ apply `SOCK_NONBLOCK`/`SOCK_CLOEXEC` with `fcntl`.
   console. The daemon therefore installs its own resolver (`dns.go`): it
   probes `127.0.0.1:53`, the default gateway and three public resolvers,
   uses the first that answers, and checks again every five minutes or when
-  the network changes. The daemon imports `x509roots/fallback` for TLS
-  roots.
+  the network changes. A query the chosen server cannot answer — silence,
+  or SERVFAIL, which is what a resolver gives for a name it blocks or
+  breaks — is asked a second time over DNS-over-HTTPS (RFC 8484): the
+  published addresses of `cloudflare-dns.com` and `dns.google` are dialed
+  directly with the endpoint's name carried as the TLS server name, so the
+  DoH endpoints need no name lookup of their own and no UDP port 53 path
+  exists for a network to intercept. The daemon imports `x509roots/fallback`
+  for TLS roots.
 - A payload's stdin, stdout and stderr are the ELF loader's TCP connection.
   Go kills a process whose write to fd 1 or 2 fails with `EPIPE`, so the
   daemon moves that connection to another descriptor and points 1 and 2 at

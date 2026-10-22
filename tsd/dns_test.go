@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/binary"
+	"errors"
+	"io"
 	"net"
 	"strings"
 	"testing"
@@ -132,5 +135,145 @@ func TestDNSAnswers(t *testing.T) {
 	}
 	if time.Since(start) > 3*time.Second {
 		t.Errorf("the probe took %v", time.Since(start))
+	}
+}
+
+// replyTo builds a reply to query with the given flags (response bit set)
+// and rcode.
+func replyTo(query []byte, rcode byte) []byte {
+	r := append([]byte(nil), query[:12]...)
+	r[2] = 0x81
+	r[3] = rcode
+	r[6], r[7] = 0, 1 // one answer
+	return r
+}
+
+// The plain server answers for most names and fails one, the way a resolver
+// blocking or breaking a single name does; and it fails everything, the way
+// a dead one does. Both cases must fall back to DNS-over-HTTPS.
+func TestForwardQuery(t *testing.T) {
+	ctx := context.Background()
+	fakeDoH := func(ctx context.Context, query []byte) ([]byte, error) {
+		r := replyTo(query, 0)
+		r[11] = 0xAA // a mark to recognise
+		return r, nil
+	}
+
+	// The plain server can answer: its reply is passed through untouched.
+	p := &dnsPicker{
+		logf:     func(string, ...any) {},
+		plainAsk: func(ctx context.Context, _, _ string, q []byte) ([]byte, error) { return replyTo(q, 0), nil },
+		dohAsk:   fakeDoH,
+	}
+	q := dnsQuery(7, "github.com")
+	if r := p.forwardQuery(ctx, "udp", "1.1.1.1:53", q); r[11] != 0 {
+		t.Error("the plain server's answer was not passed through")
+	}
+
+	// NXDOMAIN is an answer: the fallback stays out of it.
+	p.plainAsk = func(ctx context.Context, _, _ string, q []byte) ([]byte, error) { return replyTo(q, 3), nil }
+	if r := p.forwardQuery(ctx, "udp", "1.1.1.1:53", q); r[11] != 0 || dnsRcode(r) != 3 {
+		t.Error("NXDOMAIN was replaced by the fallback")
+	}
+
+	// SERVFAIL for this one name: asked over HTTPS, and the answer carries
+	// the id of the original query.
+	p.plainAsk = func(ctx context.Context, _, _ string, q []byte) ([]byte, error) { return replyTo(q, 2), nil }
+	r := p.forwardQuery(ctx, "udp", "192.168.0.1:53", q)
+	if r[11] != 0xAA || r[0] != q[0] || r[1] != q[1] {
+		t.Errorf("SERVFAIL not resolved over HTTPS: % x", r)
+	}
+
+	// Plain server refuses outright: also asked over HTTPS.
+	p.plainAsk = func(ctx context.Context, _, _ string, q []byte) ([]byte, error) { return nil, errors.New("refused") }
+	if r := p.forwardQuery(ctx, "udp", "192.168.0.1:53", q); r[11] != 0xAA {
+		t.Error("a refused plain server did not fall back")
+	}
+
+	// Both fail: a clean SERVFAIL of our own, so the resolver is not left
+	// waiting for an answer that will not come.
+	p.dohAsk = func(ctx context.Context, q []byte) ([]byte, error) { return nil, errors.New("no route") }
+	r = p.forwardQuery(ctx, "udp", "192.168.0.1:53", q)
+	if dnsRcode(r) != 2 || r[0] != q[0] {
+		t.Errorf("both failing should end in SERVFAIL: % x", r)
+	}
+
+	// DoH is not logged for every query. A fresh picker, so the earlier
+	// fallbacks in this test do not count as the recent one.
+	var logs int
+	p2 := &dnsPicker{
+		logf:     func(string, ...any) { logs++ },
+		plainAsk: func(ctx context.Context, _, _ string, q []byte) ([]byte, error) { return nil, errors.New("refused") },
+		dohAsk:   fakeDoH,
+	}
+	for i := 0; i < 3; i++ {
+		p2.forwardQuery(ctx, "udp", "192.168.0.1:53", q)
+	}
+	if logs != 1 {
+		t.Errorf("the fallback was logged %d times, want once", logs)
+	}
+}
+
+// A query through the connection handed to Go's resolver: the resolver
+// writes a DNS query, and an answer comes back with the right id, over both
+// UDP (datagram) and TCP (length-prefixed) framing.
+func TestDialResolverConnection(t *testing.T) {
+	for _, network := range []string{"udp", "tcp"} {
+		p := &dnsPicker{
+			logf:       func(string, ...any) {},
+			candidates: func() []string { return []string{"1.1.1.1:53"} },
+			probe:      func(context.Context, string) bool { return true },
+			plainAsk:   func(ctx context.Context, _, _ string, q []byte) ([]byte, error) { return replyTo(q, 2), nil },
+			dohAsk: func(ctx context.Context, q []byte) ([]byte, error) {
+				return replyTo(q, 0), nil
+			},
+		}
+		c, err := p.dial(context.Background(), network, "nowhere:53")
+		if err != nil {
+			t.Fatal(err)
+		}
+		q := dnsQuery(0xABCD, "example.com")
+		if network == "tcp" {
+			binary.Write(c, binary.BigEndian, uint16(len(q)))
+		}
+		c.Write(q)
+		c.SetReadDeadline(time.Now().Add(2 * time.Second))
+		var buf []byte
+		if network == "tcp" {
+			var l uint16
+			if err := binary.Read(c, binary.BigEndian, &l); err != nil {
+				t.Fatalf("tcp: length: %v", err)
+			}
+			buf = make([]byte, l)
+			if _, err := io.ReadFull(c, buf); err != nil {
+				t.Fatalf("tcp: body: %v", err)
+			}
+		} else {
+			raw := make([]byte, 1500)
+			n, err := c.Read(raw)
+			if err != nil {
+				t.Fatalf("%s: read: %v", network, err)
+			}
+			buf = raw[:n]
+		}
+		c.Close()
+		if dnsRcode(buf) != 0 || buf[0] != 0xAB || buf[1] != 0xCD {
+			t.Errorf("%s: bad reply % x", network, buf)
+		}
+	}
+}
+
+// The real DNS-over-HTTPS path, if this machine has a network.
+func TestDoHLive(t *testing.T) {
+	if _, err := net.DialTimeout("tcp", "1.1.1.1:443", 2*time.Second); err != nil {
+		t.Skip("no network to reach a DNS-over-HTTPS endpoint")
+	}
+	q := dnsQuery(1, "tailscale.com")
+	reply, err := dnsDoHAsk(context.Background(), q)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if dnsRcode(reply) != 0 || len(reply) <= len(q) {
+		t.Errorf("bad reply: rcode %d, %d bytes", dnsRcode(reply), len(reply))
 	}
 }
