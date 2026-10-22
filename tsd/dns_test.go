@@ -9,6 +9,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"tailscale.com/net/dnscache"
 )
 
 func testPicker(t *testing.T, candidates []string, answering map[string]bool) (*dnsPicker, *[]string, *[]string) {
@@ -315,5 +317,36 @@ func TestDoHLive(t *testing.T) {
 	}
 	if dnsRcode(reply) != 0 || len(reply) <= len(q) {
 		t.Errorf("bad reply: rcode %d, %d bytes", dnsRcode(reply), len(reply))
+	}
+}
+
+// install must wire the picker into every place a lookup can come from.
+// Tailscale's control client does not read net.DefaultResolver: it copies
+// the DNS cache's forwarder (dnscache.Get().Forward) when it is built.
+// A fork that replaced only the default resolver left coordination-server
+// lookups on the plain path, which is why a Headscale name fell through to
+// the DERP bootstrap DNS that cannot know it.
+func TestInstallWiresBothResolvers(t *testing.T) {
+	oldDefault := net.DefaultResolver
+	oldForward := dnscache.Get().Forward
+	defer func() {
+		net.DefaultResolver = oldDefault
+		dnscache.Get().Forward = oldForward
+	}()
+
+	p := &dnsPicker{
+		logf:     func(string, ...any) {},
+		plainAsk: func(ctx context.Context, _, _ string, q []byte) ([]byte, error) { return replyTo(q, 0), nil },
+	}
+	p.install()
+
+	if net.DefaultResolver == oldDefault {
+		t.Error("install did not replace the default resolver")
+	}
+	if dnscache.Get().Forward == nil {
+		t.Fatal("install did not set the DNS cache forwarder")
+	}
+	if dnscache.Get().Forward != net.DefaultResolver {
+		t.Error("control-client lookups and daemon lookups use different resolvers")
 	}
 }

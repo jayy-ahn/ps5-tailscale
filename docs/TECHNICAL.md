@@ -210,6 +210,16 @@ apply `SOCK_NONBLOCK`/`SOCK_CLOEXEC` with `fcntl`.
   DoH endpoints need no name lookup of their own and no UDP port 53 path
   exists for a network to intercept. The daemon imports `x509roots/fallback`
   for TLS roots.
+- The picker is installed into both resolvers that matter: `net.DefaultResolver`
+  (the daemon's own HTTP, the update check) and `dnscache.Get().Forward`
+  (Tailscale's DNS cache). The control client copies the cache's forwarder
+  when it is built and does not read `net.DefaultResolver`, so replacing
+  only the default resolver would leave coordination-server lookups on the
+  plain path — where, for a Headscale name, they fall through to the DERP
+  bootstrap DNS (`control: trying bootstrapDNS(...) ...` in the log), whose
+  map contains Tailscale's own host names only and can never answer for a
+  custom server. Both are wired from `dnsPicker.install()` at start-up,
+  before any Tailscale server is built.
 - A payload's stdin, stdout and stderr are the ELF loader's TCP connection.
   Go kills a process whose write to fd 1 or 2 fails with `EPIPE`, so the
   daemon moves that connection to another descriptor and points 1 and 2 at

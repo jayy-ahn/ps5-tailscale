@@ -13,6 +13,7 @@ import (
 	"sync"
 	"time"
 
+	"tailscale.com/net/dnscache"
 	"tailscale.com/net/netmon"
 )
 
@@ -391,8 +392,18 @@ func doHQuery(ctx context.Context, host, path, ip string, query []byte) ([]byte,
 }
 
 // install makes every name lookup in the process go through the picker.
+// Both places that matter: Go's default resolver, and the DNS cache
+// Tailscale's control client builds from. The control client does not ask
+// net.DefaultResolver at all (control/controlclient/direct.go copies
+// dnscache's forwarder at startup), so installing only the default
+// resolver leaves coordination-server lookups on the plain path — which
+// is exactly how a console whose network intercepts DNS ends up asking
+// DERP servers to resolve a Headscale name, which they can only ever
+// refuse: their bootstrap-dns map contains Tailscale's own names only.
 func (p *dnsPicker) install() {
-	net.DefaultResolver = &net.Resolver{PreferGo: true, Dial: p.dial}
+	r := &net.Resolver{PreferGo: true, Dial: p.dial}
+	net.DefaultResolver = r
+	dnscache.Get().Forward = r
 }
 
 // dnsAnswers asks server for the address of a name that certainly exists
