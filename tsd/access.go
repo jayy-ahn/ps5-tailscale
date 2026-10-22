@@ -108,18 +108,19 @@ func (d *daemon) allowedFrom(src netip.Addr) bool {
 // lookupOwnDevice asks Tailscale who src is. Anything that cannot be
 // established counts as not allowed.
 func (d *daemon) lookupOwnDevice(src netip.Addr) (allowed bool, who string) {
-	if d.lc == nil {
+	lc := d.localClient()
+	if lc == nil {
 		return false, "unknown"
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	st, err := d.lc.StatusWithoutPeers(ctx)
+	st, err := lc.StatusWithoutPeers(ctx)
 	if err != nil || st.Self == nil {
 		return false, "unknown"
 	}
 	// WhoIs wants an address with a port; the port plays no part for a
 	// tailnet address.
-	res, err := d.lc.WhoIs(ctx, netip.AddrPortFrom(src, 1).String())
+	res, err := lc.WhoIs(ctx, netip.AddrPortFrom(src, 1).String())
 	if err != nil || res.Node == nil {
 		return false, "unknown"
 	}

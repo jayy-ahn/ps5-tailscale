@@ -142,7 +142,7 @@ func (d *daemon) diagnostics(r *http.Request) []byte {
 		fmt.Fprintf(&out, "forwards:     %d active\n", len(d.fwd.rules()))
 	}
 
-	if d.lc != nil {
+	if d.localClient() != nil {
 		if st, err := d.status(r.Context()); err == nil {
 			section("tailscale")
 			fmt.Fprintf(&out, "backend state: %s\n", st.BackendState)

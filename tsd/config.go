@@ -25,6 +25,8 @@ type config struct {
 	// default, turns the proxy off.
 	HTTPProxyAddr string `json:"httpProxyAddr"`
 	// ControlURL selects a coordination server other than Tailscale's.
+	// It can be set on the status page; saving a different one starts
+	// Tailscale again, and the console must log in to that server.
 	ControlURL string `json:"controlURL,omitempty"`
 	// SunshineHosts are tailnet devices running Sunshine. Their streaming
 	// ports are forwarded from 127.0.0.1, so a Moonlight client on the

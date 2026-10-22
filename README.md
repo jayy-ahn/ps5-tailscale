@@ -206,11 +206,52 @@ allow it, can use it. Set one under **Settings**. It is then asked for on
 every device except the console itself. If you forget it, delete the
 `passwordHash` line from `/data/tailscale/config.json`.
 
-**Settings.** The name on the tailnet, the password, who on the tailnet may
-connect, which UDP ports are reachable and which TCP ports are not, extra
-forwards, the HTTP proxy, the folder for received files, the payload file to
-keep up to date, the priority, and update checks. Most take effect when saved; the page says which
-ones need Tailscale to be started again.
+**Settings.** The name on the tailnet, the coordination server, the
+password, who on the tailnet may connect, which UDP ports are reachable and
+which TCP ports are not, extra forwards, the HTTP proxy, the folder for
+received files, the payload file to keep up to date, the priority, and
+update checks. Most take effect when saved; the page says which
+ones need Tailscale to be started again. The coordination server is the
+exception that the page applies itself: saving a different one starts
+Tailscale again on the spot (see your own coordination server below).
+
+### Your own coordination server (Headscale)
+
+Tailscale normally signs this console in through Tailscale's own
+coordination servers. It can just as well join a tailnet that a server you
+run yourself coordinates, such as
+[Headscale](https://github.com/juanfont/headscale). Everything on the
+status page then follows your server: the login link and QR code lead to
+its login page, the device list is the tailnet as your server sees it, and
+key expiry follows its settings.
+
+1. Set the server up, and make it reachable from wherever the console will
+   be. If it needs a device approval step, plan for it as you would with
+   Tailscale.
+2. On the status page, open **Settings**, enter the server's full address
+   under **Coordination server** (for example
+   `https://headscale.example.com:8080`) and press Save. Leave it empty for
+   Tailscale's own.
+3. Tailscale on the console starts again by itself and asks to be logged in
+   again, this time on your server. The new link and QR code appear on the
+   page, as they did for the first login.
+
+Notes:
+
+- Saving needs no re-sent payload: the daemon stops its running Tailscale
+  and starts it with the new server while the status page stays up.
+  Switching back works the same way. Each server keeps its own login on the
+  console, so returning to a server you used before comes back logged in.
+- An `authKey` in the config file belongs to the server it was made on.
+  Replace or remove it when you switch servers; the daemon logs a reminder
+  when it starts with one.
+- Everything else does not care which server signs the console in: the
+  ports, the proxy, Taildrop and the forwards all work as usual. Relays
+  (DERP) come from whichever server the console is logged in to; a server
+  with no DERP of its own and no custom DERP set reaches only devices it
+  can connect to directly.
+- The status page's update check always looks at this project's GitHub
+  releases, never at your server.
 
 ### Game streaming (Moonlight to Sunshine)
 
@@ -345,7 +386,7 @@ optional.
 | `webAddr` | Where the status page listens. |
 | `passwordHash` | The status page's password, hashed. Set it on the status page; delete the field to remove a forgotten password. |
 | `httpProxyAddr` | Where the HTTP proxy listens. Empty, the default, is off. |
-| `controlURL` | A coordination server other than Tailscale's. File only. |
+| `controlURL` | A coordination server other than Tailscale's, such as Headscale; empty, the default, is Tailscale's own. Set it on the status page or here. Saving a different one starts Tailscale again and needs a new login on that server. |
 | `sunshineHosts` | The Sunshine hosts and, where it is not 47989, their port. |
 | `forwards` | What "Reach a device from this PS5" sets up: `proto` is `tcp` or `udp`, `listen` the address on the console, `target` a tailnet device and port. |
 | `udpPorts` | The console's UDP ports reachable from the tailnet. Default `[9295, 9296, 9297, 9302]` (Remote Play). `[]` turns inbound UDP off. |
@@ -481,7 +522,9 @@ reports sending the packets; no sleeping PC was at hand), switching between
 Wi-Fi and Ethernet while running, rest mode on Wi-Fi, the complete Uninstall
 on a console (its parts were tested separately), whether High priority
 improves Remote Play, a real Sunshine host on a non-default port, other
-firmware versions, coordination servers other than Tailscale's.
+firmware versions, and a real Headscale or other coordination server
+ (switching to a stand-in control server was tested on a development
+ machine; a real one on the console has not been seen).
 
 ## Building
 

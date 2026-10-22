@@ -68,8 +68,10 @@ func (d *daemon) proxyDial(ctx context.Context, network, addr string) (net.Conn,
 	d.mu.Lock()
 	running := d.state == "Running"
 	d.mu.Unlock()
-	if running && !isLocalDestination(addr) {
-		return d.srv.Dial(ctx, network, addr)
+	if running {
+		if srv := d.tailscale(); srv != nil && !isLocalDestination(addr) {
+			return srv.Dial(ctx, network, addr)
+		}
 	}
 	var direct net.Dialer
 	return direct.DialContext(ctx, network, addr)

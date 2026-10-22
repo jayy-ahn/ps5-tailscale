@@ -20,7 +20,11 @@ import (
 // connection is declined, so the peer sees an ordinary "connection refused"
 // rather than a connection that opens and closes.
 func (d *daemon) forwardToLocalhost(src, dst netip.AddrPort) (handler func(net.Conn), intercept bool) {
-	ip4, ip6 := d.srv.TailscaleIPs()
+	srv := d.tailscale()
+	if srv == nil {
+		return nil, false
+	}
+	ip4, ip6 := srv.TailscaleIPs()
 	if !addressedTo(dst.Addr(), ip4, ip6) {
 		// Only connections to the console's own tailnet addresses are for
 		// its services. Nothing else arrives today, but if this node ever

@@ -41,9 +41,13 @@ func keyWarnStage(now, expiry time.Time) int {
 // keyExpiry returns when this console's key expires; the zero time if it
 // does not expire or is not known.
 func (d *daemon) keyExpiry(ctx context.Context) time.Time {
+	lc := d.localClient()
+	if lc == nil {
+		return time.Time{}
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	st, err := d.lc.StatusWithoutPeers(ctx)
+	st, err := lc.StatusWithoutPeers(ctx)
 	if err != nil || st.Self == nil || st.Self.KeyExpiry == nil {
 		return time.Time{}
 	}

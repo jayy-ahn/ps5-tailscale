@@ -164,13 +164,14 @@ func (d *daemon) handlePingPeer(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "not a tailnet address", http.StatusBadRequest)
 		return
 	}
-	if d.lc == nil {
+	lc := d.localClient()
+	if lc == nil {
 		http.Error(w, "Tailscale is not running yet", http.StatusServiceUnavailable)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	res, err := d.lc.Ping(ctx, ip, tailcfg.PingDisco)
+	res, err := lc.Ping(ctx, ip, tailcfg.PingDisco)
 	if err != nil {
 		http.Error(w, "no answer: "+err.Error(), http.StatusGatewayTimeout)
 		return

@@ -44,8 +44,18 @@ func (d *daemon) receiveDir() string {
 // collectFiles waits for files in the holding area and moves them out.
 func (d *daemon) collectFiles(ctx context.Context) {
 	for ctx.Err() == nil {
+		lc := d.localClient()
+		if lc == nil {
+			// Tailscale is starting, or being started again.
+			select {
+			case <-ctx.Done():
+				return
+			case <-time.After(5 * time.Second):
+			}
+			continue
+		}
 		// Returns as soon as there are files, or after the wait with none.
-		files, err := d.lc.AwaitWaitingFiles(ctx, time.Minute)
+		files, err := lc.AwaitWaitingFiles(ctx, time.Minute)
 		if ctx.Err() != nil {
 			return
 		}
@@ -91,7 +101,11 @@ func (d *daemon) collectFiles(ctx context.Context) {
 // collectFile copies one waiting file into dir and removes it from the
 // holding area. It returns the name the file got.
 func (d *daemon) collectFile(ctx context.Context, dir, name string) (string, error) {
-	rc, _, err := d.lc.GetWaitingFile(ctx, name)
+	lc := d.localClient()
+	if lc == nil {
+		return "", fmt.Errorf("Tailscale is not running right now")
+	}
+	rc, _, err := lc.GetWaitingFile(ctx, name)
 	if err != nil {
 		return "", err
 	}
@@ -100,7 +114,7 @@ func (d *daemon) collectFile(ctx context.Context, dir, name string) (string, err
 	if err != nil {
 		return "", err
 	}
-	if err := d.lc.DeleteWaitingFile(ctx, name); err != nil {
+	if err := lc.DeleteWaitingFile(ctx, name); err != nil {
 		d.logf("taildrop: %s is saved, but could not be removed from the holding area: %v", name, err)
 	}
 	return saved, nil

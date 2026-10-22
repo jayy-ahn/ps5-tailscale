@@ -247,6 +247,14 @@
         <label class="field">Name on the tailnet
           <input type="text" id="set-hostname" maxlength="63" autocomplete="off">
         </label>
+        <label class="field">Coordination server
+          <input type="text" id="set-control" autocomplete="off" placeholder="Tailscale (default)">
+          <span class="hint">Leave empty for Tailscale's own servers. For a coordination server you run yourself,
+            such as <a href="https://github.com/juanfont/headscale" target="_blank" rel="noopener">Headscale</a>,
+            enter its full address, for example <code>https://headscale.example.com:8080</code>. Saving a
+            different one starts Tailscale again and signs this console out; the new login link appears on this
+            page. An auth key in <code>config.json</code> must belong to the server in use.</span>
+        </label>
         <label class="field">Password for this page <span id="set-pwstate"></span>
           <input type="password" id="set-password" autocomplete="new-password" placeholder="Leave empty to keep it as it is">
           <span class="hint">Asked on every device except the console itself. If you forget it, delete
@@ -653,7 +661,7 @@ async function refresh() {
   }
   show('keywarn', keyWarn);
 
-  const factsNow = JSON.stringify([s.dnsName, s.hostname, s.ips, s.tailnet, s.udpPorts, s.proxy, s.priority, s.allowFrom, keyText, s.dns]);
+  const factsNow = JSON.stringify([s.dnsName, s.hostname, s.ips, s.tailnet, s.controlURL, s.udpPorts, s.proxy, s.priority, s.allowFrom, keyText, s.dns]);
   if (factsNow !== shownFacts) {
     shownFacts = factsNow;
     const dl = $('facts');
@@ -661,6 +669,7 @@ async function refresh() {
     row(dl, 'Name', s.dnsName || s.hostname);
     if (s.ips.length) row(dl, 'Tailnet address', s.ips);
     if (s.tailnet) row(dl, 'Tailnet', s.tailnet);
+    if (s.controlURL) row(dl, 'Coordination server', s.controlURL, true);
     if (s.ips.length) row(dl, 'Reachable from tailnet', 'every open TCP port' + (s.udpPorts.length ? '; UDP ' + s.udpPorts.join(', ') + ' (Remote Play)' : '')
       + (s.allowFrom === 'own' ? '; only from your own devices' : ''));
     if (keyText) row(dl, 'Key expires', keyText);
@@ -937,6 +946,7 @@ async function loadSettings() {
   $('set-udp').value = c.udpPorts.join(', ');
   $('set-blocked').value = c.blockedPorts.join(', ');
   $('set-proxy').value = c.httpProxyAddr;
+  $('set-control').value = c.controlURL || '';
   $('set-priority').value = c.priority;
   $('set-allowfrom').value = c.allowFrom;
   $('set-receivedir').value = c.receiveDir;
@@ -956,6 +966,7 @@ $('settingsform').onsubmit = async ev => {
     hostname: $('set-hostname').value.trim(),
     webAddr: $('set-webaddr').value.trim(),
     httpProxyAddr: $('set-proxy').value.trim(),
+    controlURL: $('set-control').value.trim(),
     udpPorts: udp,
     blockedPorts: blocked,
     priority: $('set-priority').value,
@@ -972,6 +983,7 @@ $('settingsform').onsubmit = async ev => {
     if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
     const reply = await r.json();
     let text = 'Saved.';
+    if (reply.restarting) text += ' ' + reply.restarting;
     if (reply.restart && reply.restart.length) text += ' Takes effect when Tailscale is started again: ' + reply.restart.join(', ') + '.';
     show('settingsok', text);
     if (reply.problems && reply.problems.length) show('settingsmsg', reply.problems.join(' '));

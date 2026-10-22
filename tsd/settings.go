@@ -7,6 +7,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path"
 	"path/filepath"
@@ -36,6 +37,7 @@ type settings struct {
 	Hostname      string         `json:"hostname"`
 	WebAddr       string         `json:"webAddr"`
 	HTTPProxyAddr string         `json:"httpProxyAddr"`
+	ControlURL    string         `json:"controlURL"`
 	SunshineHosts []sunshineHost `json:"sunshineHosts"`
 	Forwards      []forwardRule  `json:"forwards"`
 	UDPPorts      []uint16       `json:"udpPorts"`
@@ -59,6 +61,7 @@ func settingsFromConfig(cfg config) settings {
 		Hostname:      cfg.Hostname,
 		WebAddr:       cfg.WebAddr,
 		HTTPProxyAddr: cfg.HTTPProxyAddr,
+		ControlURL:    cfg.ControlURL,
 		SunshineHosts: append([]sunshineHost{}, cfg.SunshineHosts...),
 		Forwards:      append([]forwardRule{}, cfg.Forwards...),
 		UDPPorts:      append([]uint16{}, cfg.UDPPorts...),
@@ -95,6 +98,11 @@ func (s *settings) validate() error {
 			return fmt.Errorf("HTTP proxy address: %w", err)
 		}
 	}
+	control, err := cleanControlURL(s.ControlURL)
+	if err != nil {
+		return err
+	}
+	s.ControlURL = control
 	if err := validateSunshineHosts(s.SunshineHosts); err != nil {
 		return err
 	}
@@ -166,6 +174,42 @@ func validTailnetName(s string) bool {
 	return true
 }
 
+// defaultControlHosts are Tailscale's own coordination servers. Naming one
+// of them means "the default", so it is stored as empty and the status page
+// shows the plain default.
+var defaultControlHosts = []string{"controlplane.tailscale.com", "login.tailscale.com"}
+
+// cleanControlURL tidies the address of a coordination server: only a
+// plain http or https URL with a host is accepted, the trailing slash of
+// the root path is dropped, and Tailscale's own server counts as the empty
+// default. An address with a path (a server served under one by a reverse
+// proxy) is kept as given.
+func cleanControlURL(s string) (string, error) {
+	const advice = "coordination server: enter the full address of your own server, such as https://headscale.example.com:8080, or leave it empty for Tailscale's"
+	s = strings.TrimSpace(s)
+	if s == "" {
+		return "", nil
+	}
+	u, err := url.Parse(s)
+	if err != nil || u.Host == "" {
+		return "", fmt.Errorf("%s", advice)
+	}
+	if u.Scheme != "http" && u.Scheme != "https" {
+		return "", fmt.Errorf("coordination server: the address must start with http:// or https://")
+	}
+	if u.User != nil || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" || u.RawPath != "" {
+		return "", fmt.Errorf("%s", advice)
+	}
+	host := strings.ToLower(u.Hostname())
+	_, port, _ := net.SplitHostPort(u.Host)
+	// Naming Tailscale's own server, with or without a port and a
+	// trailing slash, means "the default".
+	if slices.Contains(defaultControlHosts, host) && (port == "" || port == "443") && (u.Path == "" || u.Path == "/") {
+		return "", nil
+	}
+	return strings.TrimSuffix(u.String(), "/"), nil
+}
+
 func validPort(s string) bool {
 	n, err := strconv.Atoi(s)
 	return err == nil && n >= 1 && n <= 65535
@@ -224,6 +268,7 @@ func (d *daemon) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 	cfg.Hostname = s.Hostname
 	cfg.WebAddr = s.WebAddr
 	cfg.HTTPProxyAddr = s.HTTPProxyAddr
+	cfg.ControlURL = s.ControlURL
 	if s.SunshineHosts != nil {
 		// The settings form leaves the Sunshine hosts out: they have a
 		// panel of their own.
@@ -263,9 +308,12 @@ func (d *daemon) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 
 	// Apply.
 	problems := []string{}
-	if cfg.Hostname != old.Hostname && d.lc != nil {
+	// With a different coordination server, Tailscale is started again
+	// below and picks the new name up as it starts; telling the old
+	// instance would just race it.
+	if cfg.Hostname != old.Hostname && cfg.ControlURL == old.ControlURL && d.localClient() != nil {
 		ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
-		_, err := d.lc.EditPrefs(ctx, &ipn.MaskedPrefs{Prefs: ipn.Prefs{Hostname: cfg.Hostname}, HostnameSet: true})
+		_, err := d.localClient().EditPrefs(ctx, &ipn.MaskedPrefs{Prefs: ipn.Prefs{Hostname: cfg.Hostname}, HostnameSet: true})
 		cancel()
 		if err != nil {
 			problems = append(problems, "name: "+err.Error())
@@ -304,8 +352,24 @@ func (d *daemon) handleSetConfig(w http.ResponseWriter, r *http.Request) {
 		restart = append(restart, "verbose log")
 	}
 
+	out := map[string]any{"restart": restart, "problems": problems}
+	if cfg.ControlURL != old.ControlURL {
+		// Tailscale reads the coordination server only at startup; start
+		// it again in step with the saved setting, page stays up.
+		where := "Tailscale's own servers"
+		if cfg.ControlURL != "" {
+			where = cfg.ControlURL
+		}
+		if d.restartTailnet != nil {
+			go d.restartTailnet("the coordination server is now " + where)
+			out["restarting"] = "Tailscale is starting again with " + where + ". You must log in again; the new login link appears on this page."
+		} else {
+			out["restart"] = append(restart, "coordination server")
+		}
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(map[string]any{"restart": restart, "problems": problems})
+	json.NewEncoder(w).Encode(out)
 }
 
 // writePriorityFile leaves the launcher its instruction for the next start.

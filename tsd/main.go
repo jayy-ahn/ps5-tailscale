@@ -102,6 +102,7 @@ func main() {
 	os.RemoveAll(filepath.Join(dataDir, updateDirName))
 
 	d := &daemon{dns: dns, cfg: cfg, cfgPath: filepath.Join(dataDir, "config.json"), logf: logf, debug: debug, console: console, started: time.Now()}
+	d.restartTailnet = d.restartTailscale
 	if err := d.run(); err != nil {
 		logf("fatal: %v", err)
 		notify("Tailscale failed to start:\n%v", err)
@@ -147,27 +148,115 @@ type daemon struct {
 	// removeDataOnExit is set by Uninstall: delete the data directory once
 	// everything that writes to it has shut down.
 	removeDataOnExit bool
+
+	// restartTailnet starts Tailscale again with the saved settings without
+	// taking the status page down. run() sets it; it is called when a
+	// setting Tailscale only reads at startup has changed. The tests
+	// replace it with something that does not open real connections.
+	restartTailnet func(reason string)
+}
+
+// tailscale returns the running tsnet server, or nil while Tailscale is not
+// up (during start-up, or while it is being started again after the
+// coordination server was changed). Everything that uses it must call this
+// rather than reading d.srv, which can change under it.
+func (d *daemon) tailscale() *tsnet.Server {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.srv
+}
+
+// localClient returns the client for the running Tailscale, or nil while it
+// is not up. Like tailscale(), it guards a pointer that a restart replaces.
+func (d *daemon) localClient() *local.Client {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return d.lc
+}
+
+// newTailscale builds the tsnet server the settings ask for. run() uses it
+// at start-up and restartTailscale uses it to start again in step with a
+// changed setting.
+func (d *daemon) newTailscale(cfg config) *tsnet.Server {
+	srv := &tsnet.Server{
+		Dir:      filepath.Join(dataDir, "state"),
+		Hostname: cfg.Hostname,
+		AuthKey:  cfg.AuthKey,
+		UserLogf: d.tsnetLogf,
+	}
+	if cfg.ControlURL != "" {
+		srv.ControlURL = cfg.ControlURL
+	}
+	// Tailscale's own log always goes to the debug log; the main log only
+	// gets it when asked.
+	if cfg.Verbose || forceVerbose == "1" {
+		srv.Logf = func(format string, args ...any) { d.logf("ts: "+format, args...) }
+	} else {
+		srv.Logf = func(format string, args ...any) { d.debug.Printf("ts: "+format, args...) }
+	}
+	return srv
+}
+
+// restartTailscale starts Tailscale again with the settings that are saved
+// now, without taking the status page down. It is used when the
+// coordination server is changed: Tailscale picks that up only at startup,
+// and the watchers and relays that outlive the old server read the new
+// server and client through tailscale() and localClient().
+func (d *daemon) restartTailscale(reason string) {
+	d.logf("starting Tailscale again: %s", reason)
+	d.mu.Lock()
+	cfg := d.cfg
+	old := d.srv
+	d.srv, d.lc = nil, nil
+	d.state = "Starting"
+	d.authURL, d.lastErr = "", ""
+	d.notified = ""
+	d.mu.Unlock()
+
+	if old != nil {
+		done := make(chan struct{})
+		go func() { old.Close(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(15 * time.Second):
+			d.logf("the old Tailscale did not finish stopping in 15 s; carrying on")
+		}
+	}
+	if d.stopping() {
+		return
+	}
+	if cfg.AuthKey != "" {
+		d.logf("note: an auth key is in the config; it must belong to the coordination server now in use")
+	}
+
+	srv := d.newTailscale(cfg)
+	srv.RegisterFallbackTCPHandler(d.forwardToLocalhost)
+	if err := srv.Start(); err != nil {
+		d.logf("restarting Tailscale: %v", err)
+		d.mu.Lock()
+		d.lastErr = err.Error()
+		d.mu.Unlock()
+		return
+	}
+	lc, err := srv.LocalClient()
+	if err != nil {
+		d.logf("restarting Tailscale: local client: %v", err)
+		d.mu.Lock()
+		d.lastErr = err.Error()
+		d.mu.Unlock()
+		srv.Close()
+		return
+	}
+	d.mu.Lock()
+	d.srv, d.lc = srv, lc
+	d.mu.Unlock()
+	d.logf("Tailscale is running on the new settings")
 }
 
 func (d *daemon) run() error {
 	d.quit = make(chan struct{})
 
-	d.srv = &tsnet.Server{
-		Dir:      filepath.Join(dataDir, "state"),
-		Hostname: d.cfg.Hostname,
-		AuthKey:  d.cfg.AuthKey,
-		UserLogf: d.tsnetLogf,
-	}
-	if d.cfg.ControlURL != "" {
-		d.srv.ControlURL = d.cfg.ControlURL
-	}
-	// Tailscale's own log always goes to the debug log; the main log only
-	// gets it when asked.
-	if d.cfg.Verbose || forceVerbose == "1" {
-		d.srv.Logf = func(format string, args ...any) { d.logf("ts: "+format, args...) }
-	} else {
-		d.srv.Logf = func(format string, args ...any) { d.debug.Printf("ts: "+format, args...) }
-	}
+	srv := d.newTailscale(d.cfg)
 
 	// The web UI comes up first so that it can show progress and errors even
 	// if Tailscale itself has trouble starting.
@@ -184,13 +273,16 @@ func (d *daemon) run() error {
 	go d.serveWeb(d.tailnetWeb, handler)
 	d.writePriorityFile()
 
-	if err := d.srv.Start(); err != nil {
+	if err := srv.Start(); err != nil {
 		return fmt.Errorf("starting tailscale: %w", err)
 	}
-	d.lc, err = d.srv.LocalClient()
+	lc, err := srv.LocalClient()
 	if err != nil {
 		return fmt.Errorf("local client: %w", err)
 	}
+	d.mu.Lock()
+	d.srv, d.lc = srv, lc
+	d.mu.Unlock()
 
 	if err := d.setProxy(d.cfg.HTTPProxyAddr); err != nil {
 		d.logf("http proxy: %v", err)
@@ -198,11 +290,11 @@ func (d *daemon) run() error {
 
 	d.fwd.set(d.localForwardRules())
 
-	d.srv.RegisterFallbackTCPHandler(d.forwardToLocalhost)
+	srv.RegisterFallbackTCPHandler(d.forwardToLocalhost)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	d.udp = &udpExposer{listen: d.srv.ListenPacket, logf: d.logf, targetHost: "127.0.0.1", allow: d.allowedFromAddr}
+	d.udp = &udpExposer{listen: d.listenPacket, logf: d.logf, targetHost: "127.0.0.1", allow: d.allowedFromAddr}
 	go d.watch(ctx)
 	go d.recoverLogin(ctx)
 	go d.exposeUDP(ctx)
@@ -224,7 +316,9 @@ func (d *daemon) run() error {
 
 	done := make(chan struct{})
 	go func() {
-		d.srv.Close()
+		if s := d.tailscale(); s != nil {
+			s.Close()
+		}
 		close(done)
 	}()
 	select {
@@ -245,7 +339,22 @@ func (d *daemon) run() error {
 
 // dialTailnet opens a connection through Tailscale.
 func (d *daemon) dialTailnet(ctx context.Context, network, addr string) (net.Conn, error) {
-	return d.srv.Dial(ctx, network, addr)
+	srv := d.tailscale()
+	if srv == nil {
+		return nil, fmt.Errorf("Tailscale is not running right now")
+	}
+	return srv.Dial(ctx, network, addr)
+}
+
+// listenPacket opens a packet connection on a tailnet address of the
+// running Tailscale. It outlives a restart, so it looks the server up on
+// every call rather than holding on to one.
+func (d *daemon) listenPacket(network, addr string) (net.PacketConn, error) {
+	srv := d.tailscale()
+	if srv == nil {
+		return nil, fmt.Errorf("Tailscale is not running right now")
+	}
+	return srv.ListenPacket(network, addr)
 }
 
 // localForwardRules returns the local forwards the config asks for.
@@ -297,10 +406,12 @@ func (d *daemon) exposeUDP(ctx context.Context) {
 		d.mu.Unlock()
 		if running {
 			var addrs []netip.Addr
-			v4, v6 := d.srv.TailscaleIPs()
-			for _, a := range []netip.Addr{v4, v6} {
-				if a.IsValid() {
-					addrs = append(addrs, a)
+			if srv := d.tailscale(); srv != nil {
+				v4, v6 := srv.TailscaleIPs()
+				for _, a := range []netip.Addr{v4, v6} {
+					if a.IsValid() {
+						addrs = append(addrs, a)
+					}
 				}
 			}
 			if len(addrs) > 0 {
@@ -346,7 +457,11 @@ func (d *daemon) watch(ctx context.Context) {
 }
 
 func (d *daemon) watchOnce(ctx context.Context) error {
-	w, err := d.lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
+	lc := d.localClient()
+	if lc == nil {
+		return fmt.Errorf("Tailscale is not running right now")
+	}
+	w, err := lc.WatchIPNBus(ctx, ipn.NotifyInitialState)
 	if err != nil {
 		return err
 	}
@@ -378,10 +493,14 @@ func (d *daemon) freshLogin(ctx context.Context) error {
 	d.authURL = ""
 	d.lastRelogin = time.Now()
 	d.mu.Unlock()
-	if err := d.lc.Logout(ctx); err != nil {
+	lc := d.localClient()
+	if lc == nil {
+		return fmt.Errorf("Tailscale is not running right now")
+	}
+	if err := lc.Logout(ctx); err != nil {
 		d.logf("fresh login: logout: %v", err)
 	}
-	return d.lc.StartLoginInteractive(ctx)
+	return lc.StartLoginInteractive(ctx)
 }
 
 // recoverLogin gets the daemon out of a dead-end seen on the console: the
@@ -470,9 +589,13 @@ func (d *daemon) setState(ctx context.Context, state string) {
 }
 
 func (d *daemon) status(ctx context.Context) (*ipnstate.Status, error) {
+	lc := d.localClient()
+	if lc == nil {
+		return nil, fmt.Errorf("Tailscale is not running right now")
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	return d.lc.Status(ctx)
+	return lc.Status(ctx)
 }
 
 // webURL is the address of the status page as seen from the local network.

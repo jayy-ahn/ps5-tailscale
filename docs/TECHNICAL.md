@@ -121,6 +121,32 @@ and sends it to the loader (`tsd/homeicon.go`).
 There is no installer. Nothing is copied anywhere and no payload autoloader
 is touched: the payload is run from wherever the user keeps it.
 
+### Changing the coordination server while running
+
+Tailscale reads its coordination server (ControlURL) only when it starts,
+but the setting is worth applying without a re-sent payload, so
+`restartTailscale` closes the running `tsnet.Server` and starts a new one
+in the same process. Two things make that safe:
+
+- The status page, the pid file and the launcher's priority file are all
+  outside the tsnet server, so the page keeps serving and watching through
+  the change. The watchers that outlive a server (`watch`, `recoverLogin`,
+  `exposeUDP`, `watchKeyExpiry`, `collectFiles`) and every request handler
+  look the server and its local client up through `daemon.tailscale()` and
+  `daemon.localClient()`, which return the current ones or nil; with nil,
+  each loop waits and forwards refuse rather than assume anything.
+- Tailscale's state directory keeps one login profile per coordination
+  server, keyed by its address, so a new server is a fresh login and
+  switching back to a server used before finds its login waiting. Nothing
+  of the old server's state is reused for the new one.
+
+Verified on a development machine against two stand-in control servers on
+`127.0.0.1`: with the second one set on the status page, all control
+traffic (its `GET /key` requests and the resulting "fetch control key: 404"
+health) moved from the first to the second within the restart, the page
+stayed up, and the config file kept the new address. Not yet tried against
+a real Headscale on the console.
+
 ## The PS5 as a Go target
 
 Go is built for `GOOS=freebsd GOARCH=amd64` with cgo off and

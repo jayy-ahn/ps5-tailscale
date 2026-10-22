@@ -71,6 +71,9 @@ type statusInfo struct {
 	PasswordSet bool `json:"passwordSet"`
 	// AllowFrom is "all" or "own": which tailnet devices may connect.
 	AllowFrom string `json:"allowFrom"`
+	// ControlURL is the coordination server in use; empty means
+	// Tailscale's own.
+	ControlURL string `json:"controlURL,omitempty"`
 	// KeyExpiry is when this console's Tailscale key expires, if it does.
 	KeyExpiry *time.Time `json:"keyExpiry,omitempty"`
 	// LatestVersion and UpdateURL are set when a newer release exists.
@@ -206,6 +209,7 @@ func (d *daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		Proxy:         d.cfg.HTTPProxyAddr,
 		Priority:      priorityLow,
 		AllowFrom:     accessAll,
+		ControlURL:    d.cfg.ControlURL,
 		PasswordSet:   d.cfg.PasswordHash != "",
 		Uptime:        int64(time.Since(d.started).Seconds()),
 		IPs:           []string{},
@@ -245,7 +249,7 @@ func (d *daemon) handleStatus(w http.ResponseWriter, r *http.Request) {
 		info.State = "Starting"
 	}
 
-	if d.lc != nil {
+	if d.localClient() != nil {
 		if st, err := d.status(r.Context()); err == nil {
 			info.State = st.BackendState
 			info.Health = st.Health
@@ -295,7 +299,8 @@ func (d *daemon) handleQR(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *daemon) handleLogin(w http.ResponseWriter, r *http.Request) {
-	if d.lc == nil {
+	lc := d.localClient()
+	if lc == nil {
 		http.Error(w, "tailscale is still starting", http.StatusServiceUnavailable)
 		return
 	}
@@ -307,7 +312,7 @@ func (d *daemon) handleLogin(w http.ResponseWriter, r *http.Request) {
 		// The pending link may be used up or expired; get a new one.
 		err = d.freshLogin(r.Context())
 	} else {
-		err = d.lc.StartLoginInteractive(r.Context())
+		err = lc.StartLoginInteractive(r.Context())
 	}
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -317,11 +322,12 @@ func (d *daemon) handleLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func (d *daemon) handleLogout(w http.ResponseWriter, r *http.Request) {
-	if d.lc == nil {
+	lc := d.localClient()
+	if lc == nil {
 		http.Error(w, "tailscale is still starting", http.StatusServiceUnavailable)
 		return
 	}
-	if err := d.lc.Logout(r.Context()); err != nil {
+	if err := lc.Logout(r.Context()); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -400,8 +406,8 @@ func (d *daemon) handleUninstall(w http.ResponseWriter, r *http.Request) {
 		d.logf("uninstall: home screen icon: %v", err)
 		iconNote = "The home screen icon could not be removed (" + err.Error() + "); delete it from the home screen."
 	}
-	if d.lc != nil {
-		if err := d.lc.Logout(r.Context()); err != nil {
+	if lc := d.localClient(); lc != nil {
+		if err := lc.Logout(r.Context()); err != nil {
 			d.logf("uninstall: logout: %v", err)
 		}
 	}
@@ -557,7 +563,7 @@ func (d *daemon) handleTestTarget(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "the target must be a device and a port", http.StatusBadRequest)
 		return
 	}
-	if d.srv == nil || d.lc == nil {
+	if d.tailscale() == nil || d.localClient() == nil {
 		http.Error(w, "Tailscale is not running yet", http.StatusServiceUnavailable)
 		return
 	}
