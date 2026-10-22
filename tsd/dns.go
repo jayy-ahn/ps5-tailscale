@@ -193,32 +193,67 @@ func (p *dnsPicker) serveResolver(ctx context.Context, network, server string, c
 	}
 }
 
-// forwardQuery answers one query: from the plain server when it can, over
-// DNS-over-HTTPS when it cannot. The last resort is a server-failure answer
-// of our own, so the resolver gets a clean failure instead of a hang.
+// forwardQuery answers one query: from the plain server only when it has a
+// real answer for it. Every other outcome — silence, an error, or a
+// negative answer (NXDOMAIN, SERVFAIL, or "no error but no addresses") —
+// is asked over DNS-over-HTTPS instead: on networks that intercept plain
+// DNS, a negative answer is exactly what the interceptor hands back for a
+// name it refuses to resolve, and only a second opinion over HTTPS can
+// tell a lie from the truth. When DoH cannot answer either, the plain
+// server's reply (or a clean server failure) is returned, so nothing is
+// invented.
 func (p *dnsPicker) forwardQuery(ctx context.Context, network, server string, query []byte) []byte {
-	reply, err := p.plainAsk(ctx, network, server, query)
-	if err == nil && dnsRcode(reply) != 2 {
-		return reply
+	reply, plainErr := p.plainAsk(ctx, network, server, query)
+	if plainErr == nil && dnsRcode(reply) == 0 && dnsAnswerCount(reply) > 0 {
+		return reply // the server really answered this name
 	}
 	if p.dohAsk == nil {
-		return dnsServfail(query)
+		if plainErr != nil {
+			return dnsServfail(query)
+		}
+		return reply
 	}
 	viaDoH, dohErr := p.dohAsk(ctx, query)
-	if dohErr != nil || len(viaDoH) < 12 {
-		if err != nil {
-			return dnsServfail(query) // plain and DoH both failed
-		}
-		return reply // plain served it after all
+	reason := dnsPlainReason(plainErr, reply)
+	if dohErr == nil && len(viaDoH) >= 12 {
+		copy(viaDoH[0:2], query[0:2]) // the answer must carry this query's id
+		p.logDoH(server, reason, nil)
+		return viaDoH
 	}
-	copy(viaDoH[0:2], query[0:2]) // the answer must carry this query's id
-	p.logDoH(server, err)
-	return viaDoH
+	p.logDoH(server, reason, dohErr)
+	if plainErr == nil {
+		return reply // nothing better available
+	}
+	return dnsServfail(query)
+}
+
+// dnsPlainReason says why a plain server's answer was not believed.
+func dnsPlainReason(plainErr error, reply []byte) string {
+	switch {
+	case plainErr != nil:
+		return plainErr.Error()
+	case dnsRcode(reply) == 2:
+		return "answered SERVFAIL"
+	case dnsRcode(reply) == 3:
+		return "answered NXDOMAIN"
+	default:
+		return "answered with no addresses"
+	}
+}
+
+// dnsAnswerCount is how many records a reply carries in its answer section.
+func dnsAnswerCount(reply []byte) int {
+	if len(reply) < 8 {
+		return 0
+	}
+	return int(binary.BigEndian.Uint16(reply[6:8]))
 }
 
 // logDoH mentions the fallback in the log, without repeating it every
-// few seconds while a resolver is misbehaving.
-func (p *dnsPicker) logDoH(server string, plainErr error) {
+// few seconds while a resolver is misbehaving. dohErr is nil when the
+// query went over HTTPS and came back; otherwise it says why that failed
+// too, which is worth being able to see from a diagnostics file.
+func (p *dnsPicker) logDoH(server, plainReason string, dohErr error) {
 	p.mu.Lock()
 	stamp := time.Now()
 	fresh := stamp.Sub(p.lastDoH) >= dnsDoHLogGap
@@ -229,16 +264,12 @@ func (p *dnsPicker) logDoH(server string, plainErr error) {
 	if !fresh {
 		return
 	}
-	reason := error(errSERVFAIL)
-	if plainErr != nil {
-		reason = plainErr
+	if dohErr != nil {
+		p.logf("DNS: %s could not answer a query (%s); DNS-over-HTTPS failed too (%v)", server, plainReason, dohErr)
+		return
 	}
-	p.logf("DNS: %s could not answer a query (%v); asking over HTTPS instead", server, reason)
+	p.logf("DNS: %s could not answer a query (%s); asked over HTTPS instead", server, plainReason)
 }
-
-// errSERVFAIL is the reason logged when the plain server answered but
-// could not make the lookup itself.
-var errSERVFAIL = errors.New("answered SERVFAIL")
 
 // dnsRcode is the reply's return code; 2 means SERVFAIL, a server that
 // could not make the lookup even though it is answering for other names.

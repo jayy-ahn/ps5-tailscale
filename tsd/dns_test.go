@@ -148,6 +148,14 @@ func replyTo(query []byte, rcode byte) []byte {
 	return r
 }
 
+// noAnswerTo is the other lie a blocking resolver or a transparent
+// interceptor hands back: "no error, no addresses".
+func noAnswerTo(query []byte) []byte {
+	r := make([]byte, 12)
+	copy(r, query[:12])
+	return r
+}
+
 // The plain server answers for most names and fails one, the way a resolver
 // blocking or breaking a single name does; and it fails everything, the way
 // a dead one does. Both cases must fall back to DNS-over-HTTPS.
@@ -170,10 +178,29 @@ func TestForwardQuery(t *testing.T) {
 		t.Error("the plain server's answer was not passed through")
 	}
 
-	// NXDOMAIN is an answer: the fallback stays out of it.
-	p.plainAsk = func(ctx context.Context, _, _ string, q []byte) ([]byte, error) { return replyTo(q, 3), nil }
-	if r := p.forwardQuery(ctx, "udp", "1.1.1.1:53", q); r[11] != 0 || dnsRcode(r) != 3 {
-		t.Error("NXDOMAIN was replaced by the fallback")
+	// NXDOMAIN is a negative answer: on an intercepted network it may be a
+	// lie, so it is checked with DNS-over-HTTPS, which answers for real.
+	// (plainAsk and dohAsk are now captured in the picker below.)
+	pLie := &dnsPicker{
+		logf:     func(string, ...any) {},
+		plainAsk: func(ctx context.Context, _, _ string, q []byte) ([]byte, error) { return replyTo(q, 3), nil },
+		dohAsk:   fakeDoH,
+	}
+	if r := pLie.forwardQuery(ctx, "udp", "1.1.1.1:53", q); r[11] != 0xAA {
+		t.Error("NXDOMAIN was believed without asking over HTTPS")
+	}
+
+	// "No error, no addresses" — the other way a blocking resolver lies —
+	// is checked the same way, and so is the same reply when HTTPS fails
+	// too: the plain server's reply comes back, because nothing better
+	// exists and nothing is invented.
+	pLie.plainAsk = func(ctx context.Context, _, _ string, q []byte) ([]byte, error) { return noAnswerTo(q), nil }
+	if r := pLie.forwardQuery(ctx, "udp", "1.1.1.1:53", q); r[11] != 0xAA {
+		t.Error("an empty answer was believed without asking over HTTPS")
+	}
+	pLie.dohAsk = func(ctx context.Context, q []byte) ([]byte, error) { return nil, errors.New("no route") }
+	if r := pLie.forwardQuery(ctx, "udp", "1.1.1.1:53", q); dnsRcode(r) != 0 || dnsAnswerCount(r) != 0 {
+		t.Errorf("a failing HTTPS check changed the reply: % x", r)
 	}
 
 	// SERVFAIL for this one name: asked over HTTPS, and the answer carries
@@ -198,8 +225,9 @@ func TestForwardQuery(t *testing.T) {
 		t.Errorf("both failing should end in SERVFAIL: % x", r)
 	}
 
-	// DoH is not logged for every query. A fresh picker, so the earlier
-	// fallbacks in this test do not count as the recent one.
+	// A fallback is logged, and its failure is logged too, but neither for
+	// every query. A fresh picker, so the earlier fallbacks in this test do
+	// not count as the recent one.
 	var logs int
 	p2 := &dnsPicker{
 		logf:     func(string, ...any) { logs++ },
@@ -211,6 +239,18 @@ func TestForwardQuery(t *testing.T) {
 	}
 	if logs != 1 {
 		t.Errorf("the fallback was logged %d times, want once", logs)
+	}
+	var failLogs int
+	p3 := &dnsPicker{
+		logf:     func(string, ...any) { failLogs++ },
+		plainAsk: func(ctx context.Context, _, _ string, q []byte) ([]byte, error) { return nil, errors.New("refused") },
+		dohAsk:   func(ctx context.Context, q []byte) ([]byte, error) { return nil, errors.New("no route") },
+	}
+	for i := 0; i < 3; i++ {
+		p3.forwardQuery(ctx, "udp", "192.168.0.1:53", q)
+	}
+	if failLogs != 1 {
+		t.Errorf("the failing fallback was logged %d times, want once", failLogs)
 	}
 }
 

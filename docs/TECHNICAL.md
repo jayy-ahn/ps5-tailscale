@@ -199,10 +199,13 @@ apply `SOCK_NONBLOCK`/`SOCK_CLOEXEC` with `fcntl`.
   console. The daemon therefore installs its own resolver (`dns.go`): it
   probes `127.0.0.1:53`, the default gateway and three public resolvers,
   uses the first that answers, and checks again every five minutes or when
-  the network changes. A query the chosen server cannot answer — silence,
-  or SERVFAIL, which is what a resolver gives for a name it blocks or
-  breaks — is asked a second time over DNS-over-HTTPS (RFC 8484): the
-  published addresses of `cloudflare-dns.com` and `dns.google` are dialed
+  the network changes. A query is believed only when the plain server has a
+  real answer for it; anything else — silence, an error, or a negative
+  answer (SERVFAIL, NXDOMAIN, or "no error but no addresses", which is what
+  a blocking resolver or a transparent interceptor hands back for a name it
+  refuses to resolve) — is asked a second time over DNS-over-HTTPS
+  (RFC 8484): the published addresses of `cloudflare-dns.com` and
+  `dns.google` are dialed
   directly with the endpoint's name carried as the TLS server name, so the
   DoH endpoints need no name lookup of their own and no UDP port 53 path
   exists for a network to intercept. The daemon imports `x509roots/fallback`
