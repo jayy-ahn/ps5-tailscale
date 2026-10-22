@@ -246,6 +246,16 @@ apply `SOCK_NONBLOCK`/`SOCK_CLOEXEC` with `fcntl`.
   map contains Tailscale's own host names only and can never answer for a
   custom server. Both are wired from `dnsPicker.install()` at start-up,
   before any Tailscale server is built.
+- Every exchange on the connection Go's resolver hands the picker is framed
+  with a 2-byte length prefix, on UDP as well as TCP — the prefix is not
+  part of the wire format; it is how Go's resolver talks to a custom `Dial`
+  in both directions. The picker takes the prefix off the query and puts it
+  back on the answer (`serveResolver`). An answer written without it is
+  never read: the lookup dies in `i/o timeout` however fast and correct the
+  answer was, and forwarded queries that keep the prefix are rejected by
+  real DoH servers (`400 Bad Request`, `RCodeNotImplemented`).
+  `TestResolverEndToEnd` drives the picker behind a real `net.Resolver` so
+  this cannot regress again.
 - A payload's stdin, stdout and stderr are the ELF loader's TCP connection.
   Go kills a process whose write to fd 1 or 2 fails with `EPIPE`, so the
   daemon moves that connection to another descriptor and points 1 and 2 at
